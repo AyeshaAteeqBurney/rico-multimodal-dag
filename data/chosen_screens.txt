@@ -1,0 +1,6 @@
+# RICO Lab — the 5 screen IDs the notebook ingests.
+2
+26
+37
+41
+50
