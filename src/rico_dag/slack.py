@@ -1,4 +1,4 @@
-"""Person 3 implementation placeholder callbacks."""
+"""Implementation placeholder callbacks."""
 
 from __future__ import annotations
 

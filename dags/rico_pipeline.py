@@ -12,7 +12,6 @@ from rico_dag import extract, ingest, load, parse
 from rico_dag.db import end_run, start_run
 from rico_dag.slack import notify_audit_failed, notify_run_finished, notify_run_started
 
-
 @dag(
     dag_id="rico_pipeline",
     description="RICO notebook pipeline translated to an idempotent DAG.",
@@ -56,17 +55,20 @@ def rico_pipeline():
         return load.run(run_id=payload["run_id"], screen_ids=payload["screen_ids"])
 
     @task(on_failure_callback=notify_audit_failed)
-    def audit_task(run_id: str):
-        return audit.run(run_id=run_id)
+    def audit_task(load_out: dict):
+        # Pass whole load_task XCom dict — loaded["run_id"] looks for a separate XCom key and fails.
+        return audit.run(run_id=load_out["run_id"])
 
     @task(trigger_rule="all_success")
-    def eval_task(run_id: str):
-        return eval_stage.run(run_id=run_id)
+    def eval_task(audit_out: dict):
+        return eval_stage.run(run_id=audit_out["run_id"])
 
     @task(trigger_rule="all_done")
-    def finalize_task(run_id: str, **context):  # noqa: ANN003
+    def finalize_task(**context):  # noqa: ANN003
         ti = context["ti"]
         dag_run = context["dag_run"]
+        ingest_payload = ti.xcom_pull(task_ids="ingest_task")
+        run_id = ingest_payload["run_id"]
         if dag_run.get_state() == "success":
             status = "succeeded"
         elif ti.xcom_pull(task_ids="audit_task", default=None) is None and ti.xcom_pull(
@@ -84,13 +86,14 @@ def rico_pipeline():
     text_out = embed_text_task(parsed_out)
     extract_out = extract_task(parsed_out)
 
-    loaded = load_task(parsed_out)
-    [image_out, text_out, extract_out] >> loaded
+    # Use extract_out as payload (run_id + screen_ids); do not pass parsed_out or load gets a
+    # direct parse_task → load_task edge and appears to bypass the parallel embed/extract steps.
+    loaded = load_task(extract_out)
+    [image_out, text_out] >> loaded
 
-    audited = audit_task(parsed_out["run_id"])
-    evaluated = eval_task(parsed_out["run_id"])
-    loaded >> audited >> evaluated
-    finalize_task(parsed_out["run_id"]) << [audited, evaluated]
+    audited = audit_task(loaded)
+    evaluated = eval_task(audited)
+    finalize_task() << [audited, evaluated]
 
 
 rico_pipeline()

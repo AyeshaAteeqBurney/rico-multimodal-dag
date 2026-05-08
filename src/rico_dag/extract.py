@@ -1,4 +1,8 @@
-﻿"""Person 2 implementation placeholder."""
+﻿"""LLM extraction + review queue 
+
+Input text: MinIO ``text/{screen_id}.txt``. Use ``OLLAMA_ENDPOINT`` (``ollama`` hostname in
+Compose). 
+"""
 
 from __future__ import annotations
 

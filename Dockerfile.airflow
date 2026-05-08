@@ -8,7 +8,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 USER airflow
 WORKDIR /opt/airflow
 
-COPY pyproject.toml /opt/airflow/pyproject.toml
-COPY src /opt/airflow/src
+COPY --chown=airflow:root pyproject.toml /opt/airflow/pyproject.toml
+COPY --chown=airflow:root src /opt/airflow/src
+
+# CPU wheels only — avoids pulling CUDA/cuDNN/Triton from PyPI when ML deps install.
+RUN pip install --no-cache-dir \
+    torch==2.5.1 \
+    torchvision==0.20.1 \
+    --index-url https://download.pytorch.org/whl/cpu
 
 RUN pip install --no-cache-dir -e /opt/airflow

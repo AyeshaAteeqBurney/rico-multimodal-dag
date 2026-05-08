@@ -1,4 +1,7 @@
-﻿"""Person 2 implementation placeholder."""
+﻿"""SBERT text embeddings  
+
+Reads parsed text from MinIO ``text/{screen_id}.txt``.
+"""
 
 from __future__ import annotations
 

@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import io
 import json
 from pathlib import Path
 
 from datasets import load_dataset
+from PIL import Image
 
 from rico_dag.config import settings
 from rico_dag.db import fingerprint, get_conn
@@ -22,6 +24,41 @@ def _read_chosen_ids() -> list[int]:
     return chosen
 
 
+def _image_to_png_bytes(image: object) -> bytes:
+    """HF may return a dict with raw bytes (older) or a decoded PIL image (newer `datasets`)."""
+    if isinstance(image, dict) and "bytes" in image:
+        return image["bytes"]
+    if isinstance(image, (bytes, bytearray, memoryview)):
+        return bytes(image)
+    if isinstance(image, Image.Image):
+        buf = io.BytesIO()
+        im = image
+        if im.mode in ("P", "PA"):
+            im = im.convert("RGBA")
+        elif im.mode not in ("RGB", "RGBA", "L"):
+            im = im.convert("RGB")
+        im.save(buf, format="PNG")
+        return buf.getvalue()
+    raise TypeError(f"Unsupported image column type: {type(image)!r}")
+
+
+def _hierarchy_json_bytes(row: dict) -> bytes:
+    """HF schema varies: older rows used `ui_obj`; current RICO-Screen2Words uses `view_hierarchy`."""
+    if "ui_obj" in row:
+        raw = row["ui_obj"]
+    elif "view_hierarchy" in row:
+        raw = row["view_hierarchy"]
+    else:
+        raise KeyError(
+            "Dataset row has no UI hierarchy column "
+            "(expected 'ui_obj' or 'view_hierarchy'). "
+            f"Available keys: {sorted(row.keys())}"
+        )
+    if isinstance(raw, str):
+        return raw.encode("utf-8")
+    return json.dumps(raw, ensure_ascii=True).encode("utf-8")
+
+
 def run(*, run_id: str, limit: int) -> list[int]:
     chosen_ids = set(_read_chosen_ids()[:limit])
     if not chosen_ids:
@@ -36,8 +73,8 @@ def run(*, run_id: str, limit: int) -> list[int]:
             if screen_id not in chosen_ids:
                 continue
 
-            png_bytes = row["image"]["bytes"]
-            hierarchy_bytes = json.dumps(row["ui_obj"], ensure_ascii=True).encode("utf-8")
+            png_bytes = _image_to_png_bytes(row["image"])
+            hierarchy_bytes = _hierarchy_json_bytes(row)
             png_key = f"screens/{screen_id}.png"
             hierarchy_key = f"screens/{screen_id}.hierarchy.json"
 
@@ -62,7 +99,9 @@ def run(*, run_id: str, limit: int) -> list[int]:
                 """,
                 (
                     screen_id,
-                    row.get("package"),
+                    row.get("package")
+                    or row.get("app_package_name")
+                    or row.get("app_package"),
                     row.get("category"),
                     png_key,
                     hierarchy_key,

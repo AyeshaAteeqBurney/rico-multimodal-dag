@@ -1,4 +1,6 @@
-﻿"""Person 2 implementation placeholder."""
+﻿"""Post-embed load / finalization 
+Verify expected rows, summarize counts, idempotent DB writes. 
+"""
 
 from __future__ import annotations
 

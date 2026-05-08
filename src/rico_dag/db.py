@@ -86,4 +86,5 @@ def end_run(*, run_id: str, status: str) -> None:
 
 
 def logger_with_run_id(base_logger: logging.Logger, run_id: str) -> logging.LoggerAdapter:
+    """Attach ``run_id`` to log records (Project 4). Use this in embed/extract/load."""
     return logging.LoggerAdapter(base_logger, extra={"run_id": run_id})

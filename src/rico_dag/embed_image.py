@@ -1,4 +1,6 @@
-"""Person 2 implementation placeholder."""
+"""CLIP image embeddings 
+Reads PNG bytes from MinIO ``screens/{screen_id}.png``. 
+"""
 
 from __future__ import annotations
 
