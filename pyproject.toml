@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "rico-multimodal-dag"
+version = "0.1.0"
+description = "Project 4: RICO notebook translated into an Airflow DAG."
+requires-python = ">=3.11"
+dependencies = [
+  "apache-airflow==2.10.2",
+  "apache-airflow-providers-postgres>=5.11.0",
+  "apache-airflow-providers-amazon>=8.29.0",
+  "boto3>=1.35",
+  "datasets<3",
+  "fsspec<2024.4",
+  "huggingface_hub<0.24",
+  "open-clip-torch>=2.30",
+  "pgvector>=0.3",
+  "psycopg[binary]>=3.2",
+  "requests>=2.32",
+  "sentence-transformers>=3.0",
+]
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
