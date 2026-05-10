@@ -69,12 +69,22 @@ def rico_pipeline():
         dag_run = context["dag_run"]
         ingest_payload = ti.xcom_pull(task_ids="ingest_task")
         run_id = ingest_payload["run_id"]
-        if dag_run.get_state() == "success":
-            status = "succeeded"
-        elif ti.xcom_pull(task_ids="audit_task", default=None) is None and ti.xcom_pull(
-            task_ids="load_task", default=None
-        ):
+
+        # DagRun state is still "running" while this task executes — use upstream TI states.
+        def _norm_state(state: object | None) -> str | None:
+            if state is None:
+                return None
+            raw = state.value if hasattr(state, "value") else state
+            return str(raw).split(".")[-1].lower()
+
+        by_task = {t.task_id: t.state for t in dag_run.get_task_instances()}
+        audit_state = _norm_state(by_task.get("audit_task"))
+        eval_state = _norm_state(by_task.get("eval_task"))
+
+        if audit_state == "failed":
             status = "paused_by_audit"
+        elif audit_state == "success" and eval_state == "success":
+            status = "succeeded"
         else:
             status = "failed"
         end_run(run_id=run_id, status=status)

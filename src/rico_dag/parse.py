@@ -8,8 +8,23 @@ from typing import Any
 from rico_dag.storage import get_bytes, put_if_missing
 
 
+def _unwrap_ui_root(data: Any) -> dict[str, Any]:
+    """RICO view hierarchies may wrap the tree in ``{"activity": {"root": <node>}}``."""
+    if not isinstance(data, dict):
+        raise TypeError(f"Expected JSON object at root, got {type(data).__name__}")
+    if "activity" in data and isinstance(data["activity"], dict):
+        act = data["activity"]
+        inner = act.get("root")
+        if isinstance(inner, dict):
+            return inner
+        if "children" in act or "class" in act:
+            return act
+    return data
+
+
 def parse_hierarchy(raw_json: str) -> list[tuple[str, str, tuple[int, int, int, int]]]:
-    root = json.loads(raw_json)
+    loaded = json.loads(raw_json)
+    root = _unwrap_ui_root(loaded)
     out: list[tuple[str, str, tuple[int, int, int, int]]] = []
 
     def walk(node: dict[str, Any]) -> None:
