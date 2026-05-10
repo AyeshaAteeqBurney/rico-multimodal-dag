@@ -62,4 +62,4 @@ def run(*, screen_ids: list[int]) -> list[int]:
         text_repr = _to_text_representation(parsed).encode("utf-8")
         text_key = f"text/{screen_id}.txt"
         put_if_missing(key=text_key, payload=text_repr, content_type="text/plain")
-    return screen_ids
+    return {"screen_ids": screen_ids, "rows_in": len(screen_ids), "rows_out": len(screen_ids)}

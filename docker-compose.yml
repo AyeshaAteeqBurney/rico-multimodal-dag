@@ -16,6 +16,7 @@ x-airflow-env: &airflow-env
   POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-rico}
   MINIO_ENDPOINT: http://minio:9000
   OLLAMA_ENDPOINT: http://ollama:11434
+  SLACK_WEBHOOK_URL: ${SLACK_WEBHOOK_URL:-}
 
 services:
 

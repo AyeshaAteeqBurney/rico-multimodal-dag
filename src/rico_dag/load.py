@@ -63,6 +63,8 @@ def run(*, run_id: str, screen_ids: list[int]) -> dict:
         "run_id": run_id,
         "screen_ids": screen_ids,
         "task": "load",
+        "rows_in": len(screen_ids),
+        "rows_out": metadata_rows,
         "counts": {
             "expected": expected,
             "metadata_rows": metadata_rows,

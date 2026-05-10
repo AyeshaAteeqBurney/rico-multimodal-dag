@@ -101,4 +101,4 @@ def run(*, run_id: str, screen_ids: list[int]) -> dict:
         conn.commit()
 
     log.info("extract: %d succeeded, %d in review queue", succeeded, queued)
-    return {"run_id": run_id, "screen_ids": screen_ids, "task": "extract"}
+    return {"run_id": run_id, "screen_ids": screen_ids, "task": "extract", "rows_in": len(screen_ids), "rows_out": succeeded}
