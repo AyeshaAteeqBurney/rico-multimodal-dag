@@ -93,4 +93,4 @@ def run(*, run_id: str, screen_ids: list[int]) -> dict:
         inserted,
         len(screen_ids) - inserted,
     )
-    return {"run_id": run_id, "screen_ids": screen_ids, "task": "embed_image"}
+    return {"run_id": run_id, "screen_ids": screen_ids, "task": "embed_image", "rows_in": len(screen_ids), "rows_out": inserted}

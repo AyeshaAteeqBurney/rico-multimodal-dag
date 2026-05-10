@@ -115,4 +115,4 @@ def run(*, run_id: str, limit: int) -> list[int]:
 
         conn.commit()
 
-    return processed
+    return {"run_id": run_id, "screen_ids": processed, "rows_in": 0, "rows_out": len(processed)}

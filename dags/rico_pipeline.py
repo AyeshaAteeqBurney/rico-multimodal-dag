@@ -8,7 +8,7 @@ from airflow.decorators import dag, task
 from airflow.models.param import Param
 
 from rico_dag import audit, embed_image, embed_text, eval as eval_stage
-from rico_dag import extract, ingest, load, parse
+from rico_dag import extract, ingest, load, metrics, parse
 from rico_dag.db import end_run, start_run
 from rico_dag.slack import notify_audit_failed, notify_run_finished, notify_run_started
 
@@ -30,13 +30,13 @@ def rico_pipeline():
         dag_run_id = context["dag_run"].run_id
         run_id = start_run(dag_run_id=dag_run_id, limit_param=limit)
         notify_run_started(context)
-        screen_ids = ingest.run(run_id=run_id, limit=limit)
-        return {"run_id": run_id, "screen_ids": screen_ids}
+        result = ingest.run(run_id=run_id, limit=limit)
+        return {"run_id": run_id, "screen_ids": result["screen_ids"], "rows_in": result["rows_in"], "rows_out": result["rows_out"]}
 
     @task
     def parse_task(payload: dict):
-        parsed_ids = parse.run(screen_ids=payload["screen_ids"])
-        return {"run_id": payload["run_id"], "screen_ids": parsed_ids}
+        result = parse.run(screen_ids=payload["screen_ids"])
+        return {"run_id": payload["run_id"], "screen_ids": result["screen_ids"], "rows_in": result["rows_in"], "rows_out": result["rows_out"]}
 
     @task
     def embed_image_task(payload: dict):
@@ -69,8 +69,9 @@ def rico_pipeline():
         dag_run = context["dag_run"]
         ingest_payload = ti.xcom_pull(task_ids="ingest_task")
         run_id = ingest_payload["run_id"]
+        _tracked_tasks = ["ingest_task", "parse_task", "embed_image_task", "embed_text_task", "extract_task", "load_task"]
+        task_xcoms = {tid: ti.xcom_pull(task_ids=tid) for tid in _tracked_tasks}
 
-        # DagRun state is still "running" while this task executes — use upstream TI states.
         def _norm_state(state: object | None) -> str | None:
             if state is None:
                 return None
@@ -87,6 +88,7 @@ def rico_pipeline():
             status = "succeeded"
         else:
             status = "failed"
+        metrics.compute_and_persist(run_id=run_id, context=context, task_xcoms=task_xcoms)
         end_run(run_id=run_id, status=status)
 
     ingest_out = ingest_task()
