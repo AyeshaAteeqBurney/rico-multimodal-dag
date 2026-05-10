@@ -112,13 +112,45 @@ make dag-trigger LIMIT=50
 - `audit_results`: audit outcomes and details
 - `pipeline_metrics`: health and quality metrics per run
 
-## Definition of Done Checklist
+## Pipeline Metrics Explained
 
-- DAG is visible and healthy in Airflow UI.
-- A run with `LIMIT=5` populates destination tables and creates a `pipeline_runs` entry.
-- Re-running with same `LIMIT` does not create duplicates.
-- Manually inserted duplicates are caught by audit, and `eval` is skipped.
-- Destination rows have non-null `run_id` and `source_fingerprint`.
+The `pipeline_metrics` table records health and data quality metrics after each run. Key metrics:
+
+- **`screens_metadata_row_count`**: Total screens ingested in this run. Expected: matches `LIMIT`.
+- **`pct_extracted`**: Percentage of screens where LLM extraction succeeded (extraction_payload is non-null). Expected: 90-100%. Below 50% indicates extraction issues.
+- **`pct_high_confidence`**: Percentage of screens with extraction confidence >= 0.5. Expected: 80-100%. Below 70% may indicate low-quality extractions.
+- **`pct_in_review_queue`**: Percentage of screens flagged for manual review (screens_review_queue). Expected: 0-5%. Above 10% indicates systematic extraction problems.
+- **`distinct_app_packages`**: Count of unique Android app packages in this run. Indicator of dataset diversity.
+- **`distinct_categories`**: Count of unique app categories in this run. Indicator of category diversity.
+- **`embeddings_pct_zero_norm`** (by model/kind): Percentage of embeddings with near-zero norm (vector_norm < 0.001). Expected: 0%. Non-zero indicates malformed or degenerate embeddings.
+- **`embeddings_avg_dim`** (by model/kind): Average dimensionality of computed embeddings. Sanity check that embeddings are being computed at all.
+- **`task_duration_seconds`**: Wall-clock duration per task. Used to identify bottlenecks (`extract_task` is typically slowest).
+- **`task_retries`**: Retry count per task. Expected: 0. Non-zero indicates task instability.
+- **`total_run_duration_seconds`**: Total pipeline end-to-end duration. Baseline for performance tracking.
+
+## Audit Failure Interpretation
+
+The audit task checks for duplicates and acts as a circuit breaker. **If audit fails:**
+
+1. **Check `audit_results` table** for the failing run:
+   - `passed = false` indicates duplicates were found
+   - `details` (JSON) lists which table(s) had violations and which screen_ids
+
+2. **Duplicate types:**
+   - **Metadata duplicates**: Same `screen_id` appears twice in `screens_metadata` for the same run. Root cause: idempotency bug in ingest/load, or concurrent writes.
+   - **Embedding duplicates**: Same `(screen_id, model_name, model_version, embedding_kind)` appears twice for the same run. Root cause: idempotency bug in embed tasks, or data corruption.
+
+3. **Next steps:**
+   - **Investigate root cause**: Check logs for the failing task and the run before it. Did the previous run succeed? Did inputs change?
+   - **Data corruption scenario**: If duplicates are in old data (different run_id), they won't block the current run. Audit only checks the current run.
+   - **Fix and re-run**: Once root cause is fixed, truncate the problematic table (`make reset`) and trigger the DAG again.
+   - **Manual review**: Visit `http://localhost:8080`, click the failed DAG run, check task logs for details.
+
+4. **Expected behavior on audit failure:**
+   - `audit_task` fails with an AirflowException.
+   - `eval_task` is skipped (trigger_rule="all_success" prevents it from running).
+   - Run status is marked as `failed` or `paused_by_audit` in `pipeline_runs`.
+   - Slack notification (if configured) alerts that audit failed with violation details.
 
 ## Implementation Principles
 
