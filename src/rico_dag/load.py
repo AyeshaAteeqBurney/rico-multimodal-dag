@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import logging
 
+from airflow.exceptions import AirflowException
+
 from rico_dag.db import get_conn, logger_with_run_id
 
 _log = logging.getLogger(__name__)
@@ -49,6 +51,16 @@ def run(*, run_id: str, screen_ids: list[int]) -> dict:
         (review_rows,) = cur.fetchone()
 
     expected = len(screen_ids)
+    if metadata_rows < expected:
+        raise AirflowException(
+            f"load verification failed: metadata_rows={metadata_rows} expected_at_least={expected}"
+        )
+    if extracted + review_rows < expected:
+        raise AirflowException(
+            "load verification failed: extracted + review queue rows are less than expected "
+            f"({extracted} + {review_rows} < {expected})"
+        )
+
     log.info(
         "load: screens=%d metadata=%d image_emb=%d text_emb=%d extracted=%d review=%d",
         expected,

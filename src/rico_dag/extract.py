@@ -66,10 +66,16 @@ def run(*, run_id: str, screen_ids: list[int]) -> dict:
                     INSERT INTO screens_review_queue (
                         screen_id, reason, raw_output, run_id, source_fingerprint
                     ) VALUES (%s, %s, %s, %s, %s)
+                    ON CONFLICT (run_id, screen_id)
+                    DO UPDATE
+                    SET reason = EXCLUDED.reason,
+                        raw_output = EXCLUDED.raw_output,
+                        source_fingerprint = EXCLUDED.source_fingerprint
                     """,
                     (screen_id, str(exc), raw, run_id, fp),
                 )
-                queued += 1
+                if cur.rowcount > 0:
+                    queued += 1
                 log.warning("extract: screen_id=%s queued for review (%s)", screen_id, exc)
                 continue
 

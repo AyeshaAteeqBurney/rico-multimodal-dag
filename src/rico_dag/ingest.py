@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import io
 import json
+import logging
+import time
 from pathlib import Path
 
 from datasets import load_dataset
@@ -12,6 +14,27 @@ from PIL import Image
 from rico_dag.config import settings
 from rico_dag.db import fingerprint, get_conn
 from rico_dag.storage import put_if_missing
+
+_log = logging.getLogger(__name__)
+
+
+def _load_hf_streaming():
+    """Open HF streaming dataset with retries (transient hub / network)."""
+    last: Exception | None = None
+    for attempt in range(4):
+        try:
+            return load_dataset("rootsautomation/RICO-Screen2Words", split="train", streaming=True)
+        except (ConnectionError, OSError, TimeoutError) as exc:
+            last = exc
+            wait = 2**attempt
+            _log.warning("HF load_dataset attempt %s failed: %s; retrying in %ss", attempt + 1, exc, wait)
+            time.sleep(wait)
+    msg = (
+        "Could not reach Hugging Face Hub for rootsautomation/RICO-Screen2Words. "
+        "If you see DNS errors inside Docker, set dns on Airflow services (see docker-compose.yml) "
+        "or fix Docker Desktop network / VPN / corporate firewall."
+    )
+    raise ConnectionError(msg) from last
 
 
 def _read_chosen_ids() -> list[int]:
@@ -59,12 +82,12 @@ def _hierarchy_json_bytes(row: dict) -> bytes:
     return json.dumps(raw, ensure_ascii=True).encode("utf-8")
 
 
-def run(*, run_id: str, limit: int) -> list[int]:
+def run(*, run_id: str, limit: int) -> dict:
     chosen_ids = set(_read_chosen_ids()[:limit])
     if not chosen_ids:
-        return []
+        return {"run_id": run_id, "screen_ids": [], "rows_in": 0, "rows_out": 0}
 
-    ds = load_dataset("rootsautomation/RICO-Screen2Words", split="train", streaming=True)
+    ds = _load_hf_streaming()
     processed: list[int] = []
 
     with get_conn() as conn, conn.cursor() as cur:

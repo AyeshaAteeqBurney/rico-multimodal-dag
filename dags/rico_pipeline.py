@@ -88,8 +88,13 @@ def rico_pipeline():
             status = "succeeded"
         else:
             status = "failed"
-        metrics.compute_and_persist(run_id=run_id, context=context, task_xcoms=task_xcoms)
         end_run(run_id=run_id, status=status)
+        metrics.compute_and_persist(
+            run_id=run_id,
+            context=context,
+            task_xcoms=task_xcoms,
+            final_status=status,
+        )
 
     ingest_out = ingest_task()
     parsed_out = parse_task(ingest_out)

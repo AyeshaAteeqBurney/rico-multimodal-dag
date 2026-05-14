@@ -18,6 +18,13 @@ x-airflow-env: &airflow-env
   OLLAMA_ENDPOINT: http://ollama:11434
   SLACK_WEBHOOK_URL: ${SLACK_WEBHOOK_URL:-}
 
+# Fix "No address associated with hostname" for huggingface.co / hooks.slack.com on some
+# Docker Desktop (Windows) setups. Override via COMPOSE_DNS_SERVER_1 / _2 in .env if needed.
+x-airflow-dns: &airflow-dns
+  dns:
+    - ${COMPOSE_DNS_SERVER_1:-8.8.8.8}
+    - ${COMPOSE_DNS_SERVER_2:-8.8.4.4}
+
 services:
 
   postgres:
@@ -91,6 +98,7 @@ services:
     restart: "no"
 
   airflow-init:
+    <<: *airflow-dns
     build:
       context: .
       dockerfile: Dockerfile.airflow
@@ -114,6 +122,7 @@ services:
       --email admin@example.com || true"
 
   airflow-webserver:
+    <<: *airflow-dns
     image: rico-airflow:local
     depends_on:
       postgres:
@@ -131,6 +140,7 @@ services:
     command: webserver
 
   airflow-scheduler:
+    <<: *airflow-dns
     image: rico-airflow:local
     depends_on:
       postgres:

@@ -87,6 +87,53 @@ ALTER TABLE screens_review_queue
     ADD CONSTRAINT fk_screens_review_queue_run_id
     FOREIGN KEY (run_id) REFERENCES pipeline_runs(run_id);
 
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1
+    FROM information_schema.table_constraints
+    WHERE table_name = 'screens_review_queue'
+      AND constraint_name = 'uq_review_queue_run_screen'
+  ) THEN
+    EXECUTE 'ALTER TABLE screens_review_queue ADD CONSTRAINT uq_review_queue_run_screen UNIQUE (run_id, screen_id)';
+  END IF;
+END $$;
+
+ALTER TABLE screens_eval
+    ADD COLUMN IF NOT EXISTS run_id UUID,
+    ADD COLUMN IF NOT EXISTS embedding_kind TEXT;
+
+UPDATE screens_eval SET run_id = '00000000-0000-0000-0000-000000000000' WHERE run_id IS NULL;
+UPDATE screens_eval SET embedding_kind = 'unknown' WHERE embedding_kind IS NULL;
+
+ALTER TABLE screens_eval
+    ALTER COLUMN run_id SET NOT NULL,
+    ALTER COLUMN embedding_kind SET NOT NULL;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1
+    FROM information_schema.table_constraints
+    WHERE table_name = 'screens_eval'
+      AND constraint_name = 'fk_screens_eval_run_id'
+  ) THEN
+    EXECUTE 'ALTER TABLE screens_eval ADD CONSTRAINT fk_screens_eval_run_id FOREIGN KEY (run_id) REFERENCES pipeline_runs(run_id)';
+  END IF;
+END $$;
+
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1
+    FROM information_schema.table_constraints
+    WHERE table_name = 'screens_eval'
+      AND constraint_name = 'uq_screens_eval_run_model_kind'
+  ) THEN
+    EXECUTE 'ALTER TABLE screens_eval ADD CONSTRAINT uq_screens_eval_run_model_kind UNIQUE (run_id, embedding_model_version, embedding_kind)';
+  END IF;
+END $$;
+
 CREATE TABLE IF NOT EXISTS audit_results (
     id          BIGSERIAL PRIMARY KEY,
     run_id      UUID NOT NULL REFERENCES pipeline_runs(run_id),

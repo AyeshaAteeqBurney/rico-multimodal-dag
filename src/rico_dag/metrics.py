@@ -13,11 +13,21 @@ from rico_dag.db import get_conn, logger_with_run_id
 _log = logging.getLogger(__name__)
 
 
-def compute_and_persist(*, run_id: str, context: dict | None = None, task_xcoms: dict | None = None) -> dict:
+def compute_and_persist(
+    *,
+    run_id: str,
+    context: dict | None = None,
+    task_xcoms: dict | None = None,
+    final_status: str | None = None,
+) -> dict:
     log = logger_with_run_id(_log, run_id)
     _compute_data_quality(run_id=run_id, log=log)
     if context and context.get("dag_run"):
         _compute_pipeline_health(run_id=run_id, context=context, log=log, task_xcoms=task_xcoms)
+    if final_status:
+        with get_conn() as conn:
+            _insert_metric(conn, run_id, "final_run_status", 1.0, {"status": final_status})
+            conn.commit()
     log_summary(run_id=run_id, log=log)
     return {"run_id": run_id, "task": "metrics"}
 

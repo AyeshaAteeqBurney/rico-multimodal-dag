@@ -17,6 +17,24 @@ def _webhook_url() -> str | None:
     return os.getenv("SLACK_WEBHOOK_URL")
 
 
+def _pipeline_run_uuid(dag_run_id: str | None) -> str | None:
+    if not dag_run_id:
+        return None
+    try:
+        with get_conn() as conn, conn.cursor() as cur:
+            cur.execute(
+                "SELECT run_id FROM pipeline_runs WHERE dag_run_id = %s",
+                (dag_run_id,),
+            )
+            row = cur.fetchone()
+            if not row:
+                return None
+            return str(row[0])
+    except Exception as exc:
+        _log.warning("_pipeline_run_uuid lookup failed: %s", exc)
+        return None
+
+
 def _post(payload: dict) -> None:
     url = _webhook_url()
     if not url:
@@ -34,13 +52,15 @@ def notify_run_started(context: dict) -> None:
         dag_run = context.get("dag_run")
         params = context.get("params", {})
         limit = params.get("LIMIT", "?")
-        run_id = dag_run.run_id if dag_run else "unknown"
+        dag_run_id = dag_run.run_id if dag_run else "unknown"
+        pipeline_run_id = _pipeline_run_uuid(dag_run_id) or "pending"
         trigger = "manual" if (dag_run and dag_run.external_trigger) else "scheduled"
 
         _post({
             "text": (
                 f"*Pipeline started*\n"
-                f"• `run_id`: `{run_id}`\n"
+                f"• `dag_run_id`: `{dag_run_id}`\n"
+                f"• `run_id`: `{pipeline_run_id}`\n"
                 f"• `LIMIT`: {limit}\n"
                 f"• triggered by: {trigger}"
             )
@@ -54,13 +74,15 @@ def notify_audit_failed(context: dict) -> None:
         dag_run = context.get("dag_run")
         ti = context.get("ti")
         exception = context.get("exception", "")
-        run_id = dag_run.run_id if dag_run else "unknown"
+        dag_run_id = dag_run.run_id if dag_run else "unknown"
+        pipeline_run_id = _pipeline_run_uuid(dag_run_id) or "unknown"
         log_url = ti.log_url if ti else "unavailable"
 
         _post({
             "text": (
                 f"*Audit FAILED — pipeline halted*\n"
-                f"• `run_id`: `{run_id}`\n"
+                f"• `dag_run_id`: `{dag_run_id}`\n"
+                f"• `run_id`: `{pipeline_run_id}`\n"
                 f"• details: ```{str(exception)[:500]}```\n"
                 f"• logs: {log_url}"
             )
@@ -69,8 +91,8 @@ def notify_audit_failed(context: dict) -> None:
         _log.warning("notify_audit_failed failed (non-fatal): %s", exc)
 
 
-def _fetch_run_summary(dag_run_id: str) -> tuple[str, str]:
-    """Return (duration_str, metrics_line) for a completed run, or fallback strings on error."""
+def _fetch_run_summary(dag_run_id: str) -> tuple[str, str, str]:
+    """Return (pipeline_run_id, duration_str, metrics_line) for a completed run."""
     try:
         with get_conn() as conn, conn.cursor() as cur:
             cur.execute(
@@ -84,7 +106,7 @@ def _fetch_run_summary(dag_run_id: str) -> tuple[str, str]:
             )
             row = cur.fetchone()
             if not row:
-                return "unknown", "no metrics"
+                return "unknown", "unknown", "no metrics"
             uuid_run_id, duration_s = row
             duration_str = f"{duration_s}s" if duration_s is not None else "unknown"
 
@@ -114,25 +136,25 @@ def _fetch_run_summary(dag_run_id: str) -> tuple[str, str]:
                 parts.append(f"high_conf={metrics['pct_high_confidence']:.0f}%")
             if "embeddings_pct_zero_norm" in metrics:
                 parts.append(f"zero_norm={metrics['embeddings_pct_zero_norm']:.0f}%")
-            return duration_str, "  ".join(parts) if parts else "no metrics"
+            return str(uuid_run_id), duration_str, "  ".join(parts) if parts else "no metrics"
     except Exception as exc:
         _log.warning("_fetch_run_summary failed: %s", exc)
-        return "unknown", "no metrics"
+        return "unknown", "unknown", "no metrics"
 
 
 def notify_run_finished(context: dict) -> None:
     try:
         dag_run = context.get("dag_run")
-        run_id = dag_run.run_id if dag_run else "unknown"
+        dag_run_id = dag_run.run_id if dag_run else "unknown"
         state = dag_run.state if dag_run else "unknown"
-        icon = ":white_check_mark:" if state == "success" else ":x:"
 
-        duration_str, metrics_line = _fetch_run_summary(run_id)
+        pipeline_run_id, duration_str, metrics_line = _fetch_run_summary(dag_run_id)
 
         _post({
             "text": (
                 f"*Pipeline finished*\n"
-                f"• `run_id`: `{run_id}`\n"
+                f"• `dag_run_id`: `{dag_run_id}`\n"
+                f"• `run_id`: `{pipeline_run_id}`\n"
                 f"• status: `{state}`\n"
                 f"• duration: {duration_str}\n"
                 f"• summary: {metrics_line}"

@@ -127,6 +127,7 @@ The `pipeline_metrics` table records health and data quality metrics after each 
 - **`task_duration_seconds`**: Wall-clock duration per task. Used to identify bottlenecks (`extract_task` is typically slowest).
 - **`task_retries`**: Retry count per task. Expected: 0. Non-zero indicates task instability.
 - **`total_run_duration_seconds`**: Total pipeline end-to-end duration. Baseline for performance tracking.
+- **`final_run_status`**: Final pipeline outcome label in metric labels (`succeeded`, `failed`, `paused_by_audit`).
 
 ## Audit Failure Interpretation
 
@@ -151,6 +152,18 @@ The audit task checks for duplicates and acts as a circuit breaker. **If audit f
    - `eval_task` is skipped (trigger_rule="all_success" prevents it from running).
    - Run status is marked as `failed` or `paused_by_audit` in `pipeline_runs`.
    - Slack notification (if configured) alerts that audit failed with violation details.
+
+## Troubleshooting: ingest and Slack (DNS / Hub connectivity)
+
+If **`ingest_task`** fails with `ConnectionError: Couldn't reach 'rootsautomation/RICO-Screen2Words' on the Hub`, or Slack logs show **`Failed to resolve 'hooks.slack.com'`**, the Airflow container usually cannot resolve public DNS or reach the internet.
+
+1. **Recreate Airflow after compose DNS** — `docker-compose.yml` sets public DNS (`8.8.8.8`, `8.8.4.4`) on `airflow-init`, `airflow-webserver`, and `airflow-scheduler`. After pulling changes, run:
+   `docker compose up -d --force-recreate airflow-init airflow-webserver airflow-scheduler`
+2. **Override DNS** — set `COMPOSE_DNS_SERVER_1` / `COMPOSE_DNS_SERVER_2` in `.env` (see `.env.example`) if your network requires different resolvers.
+3. **Verify inside the scheduler** — `docker compose exec airflow-scheduler python -c "import socket; print(socket.gethostbyname('huggingface.co'))"` should print an IPv4 address.
+4. **Corporate / offline** — if outbound HTTPS is blocked, use VPN or proxy (`HTTP_PROXY` / `HTTPS_PROXY`), or pre-populate an HF cache and point `HF_HOME` at a volume with the dataset already downloaded.
+
+`ingest` retries `load_dataset` a few times with backoff for transient hub errors; persistent DNS or firewall issues require the steps above.
 
 ## Implementation Principles
 

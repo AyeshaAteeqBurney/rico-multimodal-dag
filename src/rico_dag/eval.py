@@ -51,8 +51,16 @@ def run(*, run_id: str) -> dict:
 
                 recall = hits / len(rows)
                 cur.execute(
-                    "INSERT INTO screens_eval (embedding_model_version, n_queries, recall_at_5) VALUES (%s, %s, %s)",
-                    (model_version, len(rows), recall),
+                    """
+                    INSERT INTO screens_eval (run_id, embedding_model_version, embedding_kind, n_queries, recall_at_5)
+                    VALUES (%s, %s, %s, %s, %s)
+                    ON CONFLICT (run_id, embedding_model_version, embedding_kind)
+                    DO UPDATE
+                    SET n_queries = EXCLUDED.n_queries,
+                        recall_at_5 = EXCLUDED.recall_at_5,
+                        created_at = NOW()
+                    """,
+                    (run_id, model_version, embedding_kind, len(rows), recall),
                 )
                 results[f"{model_version}/{embedding_kind}"] = recall
                 log.info("recall@5 for %s/%s: %.2f (%d/%d)", model_version, embedding_kind, recall, hits, len(rows))
