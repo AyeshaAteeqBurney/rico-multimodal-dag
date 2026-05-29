@@ -42,7 +42,7 @@ Examples:
   "run the pipeline for 50" -> {"action":"trigger_pipeline","limit":50}
   "is the pipeline healthy?" -> {"action":"diagnose","limit":null}
   "what went wrong with the last run?" -> {"action":"diagnose","limit":null}
-  "can you fix the duplicate issue?" -> {"action":"fix","limit":null}
+  "can you fix the audit failure?" -> {"action":"fix","limit":null}
   "please repair the pipeline" -> {"action":"fix","limit":null}
   "what time is it?" -> {"action":"unknown","limit":null}
 """.strip()

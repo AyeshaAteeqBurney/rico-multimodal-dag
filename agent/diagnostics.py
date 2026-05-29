@@ -141,7 +141,7 @@ def diagnose() -> Diagnosis:
             issue="audit_integrity",
             title="Audit failed — data integrity violation",
             detail=(
-                f"Run `{run['run_id']}` failed the *{audit['audit_name']}* audit:\n"
+                f"Run `{run['run_id']}` failed the *audit*:\n"
                 f"{_summarize_violations(details)}\n"
                 "I can repair the offending rows and re-run — re-running alone won't help."
             ),
@@ -172,7 +172,7 @@ def diagnose() -> Diagnosis:
             title=f"Last run ended as `{run['status']}`",
             detail=(
                 f"Run `{run['run_id']}` (LIMIT={run['limit_param']}) ended with status "
-                f"`{run['status']}` and no duplicate audit failure recorded. "
+                f"`{run['status']}` and no audit failure recorded. "
                 "A re-run will start a fresh attempt."
             ),
             fix_action=FIX_RERUN,

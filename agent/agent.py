@@ -3,7 +3,7 @@
 Listens for @-mentions and supports three capabilities:
   • trigger  — "backfill 20 screens" → triggers rico_pipeline via the Airflow REST API
   • diagnose — "is the pipeline healthy?" → inspects run/audit/paused state and reports
-  • fix       — "fix the duplicate issue" → proposes a remediation and waits for a human
+  • fix       — "fix the audit failure" → proposes a remediation and waits for a human
                 to reply "confirm" before executing (confirm-gated; Level B).
 
 Run:
@@ -198,7 +198,7 @@ def build_app() -> App:
                     "I couldn't understand your request. Try:\n"
                     "• *backfill 20 screens* — run the pipeline\n"
                     "• *is the pipeline healthy?* — diagnose\n"
-                    "• *fix the duplicate issue* — propose a fix (you approve before I act)"
+                    "• *fix the audit failure* — propose a fix (you approve before I act)"
                 ),
                 thread_ts=thread_ts,
             )
