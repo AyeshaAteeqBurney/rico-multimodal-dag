@@ -105,6 +105,8 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.airflow
+      args:
+        GIT_SHA: ${GIT_SHA:-unknown}
     image: rico-airflow:local
     depends_on:
       postgres:

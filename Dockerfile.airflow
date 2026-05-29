@@ -18,3 +18,8 @@ RUN pip install --no-cache-dir \
     --index-url https://download.pytorch.org/whl/cpu
 
 RUN pip install --no-cache-dir -e /opt/airflow
+
+# Commit the image was built from — surfaced in pipeline_runs.git_sha for traceability (§3.2).
+# Placed last so changing the SHA does not invalidate the expensive dependency layers above.
+ARG GIT_SHA=unknown
+ENV GIT_SHA=${GIT_SHA}

@@ -10,6 +10,9 @@ MINIO_SECRET_KEY ?= minioadmin
 MINIO_BUCKET     ?= rico-raw
 LIMIT            ?= 5
 
+# Commit baked into the image for pipeline_runs.git_sha (§3.2 traceability).
+GIT_SHA          ?= $(shell git rev-parse HEAD 2>/dev/null)
+
 help:
 	@echo "Project 4 targets:"
 	@echo "  build         build custom airflow image with project dependencies"
@@ -29,7 +32,7 @@ help:
 	@echo "  agent-smoke   smoke-test Airflow API trigger without Slack"
 
 build:
-	$(COMPOSE) build airflow-init airflow-webserver airflow-scheduler
+	$(COMPOSE) build --build-arg GIT_SHA=$(GIT_SHA) airflow-init airflow-webserver airflow-scheduler
 
 up:
 	$(COMPOSE) up -d --wait postgres minio ollama
