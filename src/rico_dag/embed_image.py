@@ -16,7 +16,7 @@ from pgvector.psycopg import register_vector
 from PIL import Image
 
 from rico_dag.config import settings
-from rico_dag.db import fingerprint, get_conn, logger_with_run_id
+from rico_dag.db import fingerprint, get_conn, logger_with_run_id, upsert_screen_embedding
 from rico_dag.storage import get_bytes
 
 _log = logging.getLogger(__name__)
@@ -65,31 +65,21 @@ def run(*, run_id: str, screen_ids: list[int]) -> dict:
                     features = model.encode_image(tensor)
                     features = features / features.norm(dim=-1, keepdim=True)
                 vector = features[0].cpu().numpy().astype("float32")
-                cur.execute(
-                    """
-                    INSERT INTO screens_embeddings (
-                        screen_id, model_name, model_version, embedding_kind,
-                        vector, run_id, source_fingerprint
-                    ) VALUES (%s, %s, %s, %s, %s, %s, %s)
-                    ON CONFLICT (screen_id, model_name, model_version, embedding_kind)
-                    DO NOTHING
-                    """,
-                    (
-                        screen_id,
-                        "open-clip",
-                        model_version,
-                        "image",
-                        vector,
-                        run_id,
-                        fingerprint(png_bytes),
-                    ),
-                )
-                if cur.rowcount > 0:
+                if upsert_screen_embedding(
+                    cur,
+                    screen_id=screen_id,
+                    model_name="open-clip",
+                    model_version=model_version,
+                    embedding_kind="image",
+                    vector=vector,
+                    run_id=run_id,
+                    source_fingerprint=fingerprint(png_bytes),
+                ):
                     inserted += 1
         conn.commit()
 
     log.info(
-        "embed_image: %d new rows, %d skipped by ON CONFLICT",
+        "embed_image: %d rows written (insert or update), %d unchanged",
         inserted,
         len(screen_ids) - inserted,
     )

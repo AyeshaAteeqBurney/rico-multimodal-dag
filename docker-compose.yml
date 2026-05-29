@@ -111,6 +111,10 @@ services:
       - ./dags:/opt/airflow/dags
       - ./src:/opt/airflow/src
       - ./data:/opt/airflow/data
+      - ./scripts:/opt/airflow/scripts
+      - ./chaos:/opt/airflow/chaos
+      - ./README.md:/opt/airflow/README.md:ro
+      - ./.env.example:/opt/airflow/.env.example:ro
     user: "${AIRFLOW_UID:-50000}:0"
     command: >
       bash -c "airflow db migrate && airflow users create
@@ -136,6 +140,8 @@ services:
       - ./dags:/opt/airflow/dags
       - ./src:/opt/airflow/src
       - ./data:/opt/airflow/data
+      - ./scripts:/opt/airflow/scripts
+      - ./chaos:/opt/airflow/chaos
     user: "${AIRFLOW_UID:-50000}:0"
     command: webserver
 
@@ -152,6 +158,10 @@ services:
       - ./dags:/opt/airflow/dags
       - ./src:/opt/airflow/src
       - ./data:/opt/airflow/data
+      - ./scripts:/opt/airflow/scripts
+      - ./chaos:/opt/airflow/chaos
+      - ./README.md:/opt/airflow/README.md:ro
+      - ./.env.example:/opt/airflow/.env.example:ro
     user: "${AIRFLOW_UID:-50000}:0"
     command: scheduler
 

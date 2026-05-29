@@ -13,7 +13,7 @@ from pgvector.psycopg import register_vector
 from sentence_transformers import SentenceTransformer
 
 from rico_dag.config import settings
-from rico_dag.db import fingerprint, get_conn, logger_with_run_id
+from rico_dag.db import fingerprint, get_conn, logger_with_run_id, upsert_screen_embedding
 from rico_dag.storage import get_bytes
 
 _log = logging.getLogger(__name__)
@@ -48,31 +48,21 @@ def run(*, run_id: str, screen_ids: list[int]) -> dict:
                     text_bytes.decode("utf-8"),
                     normalize_embeddings=True,
                 ).astype("float32")
-                cur.execute(
-                    """
-                    INSERT INTO screens_embeddings (
-                        screen_id, model_name, model_version, embedding_kind,
-                        vector, run_id, source_fingerprint
-                    ) VALUES (%s, %s, %s, %s, %s, %s, %s)
-                    ON CONFLICT (screen_id, model_name, model_version, embedding_kind)
-                    DO NOTHING
-                    """,
-                    (
-                        screen_id,
-                        "sentence-transformers",
-                        model_version,
-                        "text",
-                        vector,
-                        run_id,
-                        fingerprint(text_bytes),
-                    ),
-                )
-                if cur.rowcount > 0:
+                if upsert_screen_embedding(
+                    cur,
+                    screen_id=screen_id,
+                    model_name="sentence-transformers",
+                    model_version=model_version,
+                    embedding_kind="text",
+                    vector=vector,
+                    run_id=run_id,
+                    source_fingerprint=fingerprint(text_bytes),
+                ):
                     inserted += 1
         conn.commit()
 
     log.info(
-        "embed_text: %d new rows, %d skipped by ON CONFLICT",
+        "embed_text: %d rows written (insert or update), %d unchanged",
         inserted,
         len(screen_ids) - inserted,
     )

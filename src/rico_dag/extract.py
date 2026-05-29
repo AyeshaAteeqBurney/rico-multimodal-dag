@@ -63,14 +63,22 @@ def run(*, run_id: str, screen_ids: list[int]) -> dict:
             except (JSONDecodeError, requests.RequestException) as exc:
                 cur.execute(
                     """
+                    DELETE FROM screens_review_queue
+                    WHERE screen_id = %s
+                    """,
+                    (screen_id,),
+                )
+                cur.execute(
+                    """
                     INSERT INTO screens_review_queue (
                         screen_id, reason, raw_output, run_id, source_fingerprint
-                    ) VALUES (%s, %s, %s, %s, %s)
+                    ) VALUES (%s, %s, %s, %s::uuid, %s)
                     ON CONFLICT (run_id, screen_id)
                     DO UPDATE
                     SET reason = EXCLUDED.reason,
                         raw_output = EXCLUDED.raw_output,
-                        source_fingerprint = EXCLUDED.source_fingerprint
+                        source_fingerprint = EXCLUDED.source_fingerprint,
+                        created_at = NOW()
                     """,
                     (screen_id, str(exc), raw, run_id, fp),
                 )

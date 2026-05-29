@@ -18,6 +18,16 @@ def run(*, run_id: str) -> dict:
     with get_conn() as conn:
         register_vector(conn)
         with conn.cursor() as cur:
+            # Keep a single eval row per model/kind (latest run wins).
+            cur.execute(
+                """
+                DELETE FROM screens_eval a
+                USING screens_eval b
+                WHERE a.embedding_model_version = b.embedding_model_version
+                  AND a.embedding_kind = b.embedding_kind
+                  AND a.ctid < b.ctid
+                """
+            )
             cur.execute(
                 "SELECT DISTINCT model_version, embedding_kind FROM screens_embeddings WHERE run_id = %s",
                 (run_id,),
@@ -52,16 +62,26 @@ def run(*, run_id: str) -> dict:
                 recall = hits / len(rows)
                 cur.execute(
                     """
-                    INSERT INTO screens_eval (run_id, embedding_model_version, embedding_kind, n_queries, recall_at_5)
-                    VALUES (%s, %s, %s, %s, %s)
-                    ON CONFLICT (run_id, embedding_model_version, embedding_kind)
-                    DO UPDATE
-                    SET n_queries = EXCLUDED.n_queries,
-                        recall_at_5 = EXCLUDED.recall_at_5,
+                    UPDATE screens_eval
+                    SET run_id = %s::uuid,
+                        n_queries = %s,
+                        recall_at_5 = %s,
                         created_at = NOW()
+                    WHERE embedding_model_version = %s
+                      AND embedding_kind = %s
                     """,
-                    (run_id, model_version, embedding_kind, len(rows), recall),
+                    (run_id, len(rows), recall, model_version, embedding_kind),
                 )
+                if cur.rowcount == 0:
+                    cur.execute(
+                        """
+                        INSERT INTO screens_eval (
+                            run_id, embedding_model_version, embedding_kind, n_queries, recall_at_5
+                        )
+                        VALUES (%s::uuid, %s, %s, %s, %s)
+                        """,
+                        (run_id, model_version, embedding_kind, len(rows), recall),
+                    )
                 results[f"{model_version}/{embedding_kind}"] = recall
                 log.info("recall@5 for %s/%s: %.2f (%d/%d)", model_version, embedding_kind, recall, hits, len(rows))
 

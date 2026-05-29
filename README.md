@@ -93,9 +93,64 @@ For larger runs, increase `LIMIT`:
 make dag-trigger LIMIT=50
 ```
 
+## Validation (§6)
+
+After a successful DAG run (`make dag-trigger LIMIT=5`), verify the rubric from the assignment PDF:
+
+```bash
+make validate
+# or (from your laptop — maps postgres/minio/ollama in .env to localhost automatically)
+python scripts/validate_project4.py --skip-infra
+```
+
+If `.env` uses Docker service names (`POSTGRES_HOST=postgres`), run validation **on the host** without flags: the script rewrites them to `localhost` for published ports. Inside a container use `make validate-docker` or pass `--compose-env`.
+
+**Idempotency check** (Definition of Done §5):
+
+```bash
+python scripts/validate_project4.py --save-snapshot .p4-snapshot.json --skip-infra
+make dag-trigger LIMIT=5
+# wait for run to finish
+python scripts/validate_project4.py --check-idempotency .p4-snapshot.json --skip-infra
+```
+
+**Audit circuit breaker** (optional in-process proof):
+
+```bash
+python scripts/validate_project4.py --test-audit-breaker
+```
+
+**Audit circuit breaker demo** (Assignment §5 — corrupt data, re-run, eval skipped):
+
+```bash
+# After a successful run:
+make chaos-inject
+make dag-trigger LIMIT=5
+# In Airflow UI: audit_task failed, eval_task upstream_failed/skipped
+
+make chaos-cleanup
+make dag-trigger LIMIT=5
+# Should succeed again after cleanup
+```
+
+**Important:** After `chaos-inject`, run **`make dag-trigger`** again (do not skip cleanup first). Embed keeps working via a partial unique index; `audit_task` reassigns the chaos row to the current `run_id` and fails per §5. Then **`make chaos-cleanup`** before normal operation.
+
+If embed fails with `no unique or exclusion constraint matching the ON CONFLICT specification`, apply the DB repair migration:
+
+```bash
+docker compose exec postgres psql -U rico -d rico -f /docker-entrypoint-initdb.d/003_embeddings_chaos_safe.sql
+```
+
+(Or `make clean` on a dev volume.)
+
+Script: `chaos/inject_duplicates.py` (same idea as sess8 `chaos/inject_duplicates.py`). It tags chaos rows with `source_fingerprint=chaos-duplicate-inject-v1` and temporarily drops the embeddings PK so a true duplicate key exists for `audit_task`.
+
+See **Audit Failure Interpretation** below for SQL/log interpretation.
+
 ## Operational Commands
 
 - Start services: `make up`
+- Validate rubric: `make validate`
 - Stop services: `make down`
 - Full reset (remove volumes): `make clean`
 - Data reset (truncate tables + clear bucket): `make reset`

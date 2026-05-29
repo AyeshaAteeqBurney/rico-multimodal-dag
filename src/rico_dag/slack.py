@@ -142,21 +142,47 @@ def _fetch_run_summary(dag_run_id: str) -> tuple[str, str, str]:
         return "unknown", "unknown", "no metrics"
 
 
+def _pipeline_run_status(dag_run_id: str) -> str | None:
+    """Status from pipeline_runs (set by finalize_task), not Airflow's dag_run.state."""
+    try:
+        with get_conn() as conn, conn.cursor() as cur:
+            cur.execute(
+                "SELECT status FROM pipeline_runs WHERE dag_run_id = %s",
+                (dag_run_id,),
+            )
+            row = cur.fetchone()
+            return row[0] if row else None
+    except Exception as exc:
+        _log.warning("_pipeline_run_status lookup failed: %s", exc)
+        return None
+
+
 def notify_run_finished(context: dict) -> None:
     try:
         dag_run = context.get("dag_run")
         dag_run_id = dag_run.run_id if dag_run else "unknown"
-        state = dag_run.state if dag_run else "unknown"
+        airflow_state = dag_run.state if dag_run else "unknown"
+        # finalize_task writes the canonical status; Airflow dag_run.state can disagree.
+        status = _pipeline_run_status(dag_run_id) or airflow_state
 
         pipeline_run_id, duration_str, metrics_line = _fetch_run_summary(dag_run_id)
 
+        ok = status in ("succeeded", "success")
+        paused = status == "paused_by_audit"
+        if ok:
+            headline = "*Pipeline finished*"
+        elif paused:
+            headline = "*Pipeline finished (paused by audit)*"
+        else:
+            headline = "*Pipeline finished (with failures)*"
         _post({
             "text": (
-                f"*Pipeline finished*\n"
+                f"{headline}\n"
                 f"• `dag_run_id`: `{dag_run_id}`\n"
                 f"• `run_id`: `{pipeline_run_id}`\n"
-                f"• status: `{state}`\n"
-                f"• duration: {duration_str}\n"
+                f"• status: `{status}`"
+                + (f" (airflow: `{airflow_state}`)" if status != airflow_state else "")
+                + f"\n• duration: {duration_str}\n"
                 f"• summary: {metrics_line}"
             )
         })

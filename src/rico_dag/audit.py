@@ -12,12 +12,31 @@ from rico_dag.db import get_conn, logger_with_run_id
 
 _log = logging.getLogger(__name__)
 
+# Set by chaos/inject_duplicates.py for the §5 manual-corruption demo.
+CHAOS_FINGERPRINT = "chaos-duplicate-inject-v1"
+
 
 def run(*, run_id: str) -> dict:
     log = logger_with_run_id(_log, run_id)
     duplicates = {}
 
     with get_conn() as conn, conn.cursor() as cur:
+        # §5 re-run: chaos row was inserted on a prior succeeded run_id; evaluate this run.
+        cur.execute(
+            """
+            UPDATE screens_embeddings
+            SET run_id = %s
+            WHERE source_fingerprint = %s
+            """,
+            (run_id, CHAOS_FINGERPRINT),
+        )
+        if cur.rowcount:
+            log.warning(
+                "chaos demo: reassigned %s embedding row(s) to run_id=%s for duplicate audit",
+                cur.rowcount,
+                run_id,
+            )
+
         cur.execute(
             """
             SELECT screen_id, model_name, model_version, embedding_kind, COUNT(*)

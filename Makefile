@@ -1,4 +1,4 @@
-.PHONY: help build up down clean pull-models reset airflow-init logs dag-trigger
+.PHONY: help build up down clean pull-models reset airflow-init logs dag-trigger validate chaos-inject chaos-cleanup db-repair
 
 COMPOSE := docker compose
 
@@ -21,6 +21,9 @@ help:
 	@echo "  clean         stop services and wipe volumes (full reset)"
 	@echo "  reset         truncate tables + clear MinIO bucket"
 	@echo "  logs          tail compose logs"
+	@echo "  validate      run Project 4 rubric checks (scripts/validate_project4.py)"
+	@echo "  chaos-inject  inject duplicate rows for audit circuit-breaker demo"
+	@echo "  chaos-cleanup remove chaos rows and restore PKs"
 
 build:
 	$(COMPOSE) build airflow-init airflow-webserver airflow-scheduler
@@ -55,3 +58,24 @@ logs:
 
 dag-trigger:
 	$(COMPOSE) exec airflow-webserver airflow dags trigger rico_pipeline --conf "{\"LIMIT\":$(LIMIT)}"
+
+validate:
+	python scripts/validate_project4.py --skip-infra
+
+validate-docker:
+	$(COMPOSE) exec -e POSTGRES_HOST=postgres airflow-scheduler python /opt/airflow/scripts/validate_project4.py --skip-infra
+
+chaos-inject:
+	python chaos/inject_duplicates.py
+
+chaos-inject-docker:
+	$(COMPOSE) exec -e POSTGRES_HOST=postgres airflow-scheduler python /opt/airflow/chaos/inject_duplicates.py
+
+chaos-cleanup:
+	python chaos/inject_duplicates.py --cleanup
+
+chaos-cleanup-docker:
+	$(COMPOSE) exec -e POSTGRES_HOST=postgres airflow-scheduler python /opt/airflow/chaos/inject_duplicates.py --cleanup
+
+db-repair:
+	$(COMPOSE) exec -T postgres psql -U $(POSTGRES_USER) -d $(POSTGRES_DB) -f /docker-entrypoint-initdb.d/003_embeddings_chaos_safe.sql
