@@ -220,6 +220,104 @@ If **`ingest_task`** fails with `ConnectionError: Couldn't reach 'rootsautomatio
 
 `ingest` retries `load_dataset` a few times with backoff for transient hub errors; persistent DNS or firewall issues require the steps above.
 
+## Bonus: Backfill Agent (ChatOps)
+
+The base pipeline sends one-way Slack notifications via a webhook. This bonus adds a **two-way ChatOps interface**: a standalone Slack bot that listens for natural-language commands, uses the local Ollama LLM to parse intent, and triggers `rico_pipeline` via the Airflow REST API — all without touching the DAG code.
+
+### How it works
+
+```
+@DataBot run a backfill for 20 screens
+        │
+        ▼
+agent/agent.py   (Slack Socket Mode bot)
+        │  strip mention, send text to LLM
+        ▼
+agent/llm_parser.py   (Ollama /api/generate)
+        │  returns {"action":"trigger_pipeline","limit":20}
+        ▼
+agent/airflow_client.py
+        │  POST /api/v1/dags/rico_pipeline/dagRuns  {"conf":{"LIMIT":20}}
+        ▼
+Airflow creates manual dag run → ingest reads LIMIT=20
+        │
+        ▼
+Bot replies in Slack thread with dag_run_id + link
+```
+
+### Prerequisites
+
+1. Stack is running: `make up`
+2. Ollama model is pulled: `make pull-models`
+3. A Slack App is created and its tokens are in `.env` (see setup below).
+4. `rico_pipeline` is **unpaused** in the Airflow UI at <http://localhost:8080> (DAGs are paused at creation by default).
+
+### Slack App setup (one-time)
+
+1. Go to <https://api.slack.com/apps> → **Create New App** → **From scratch**.
+2. **Socket Mode** (left sidebar) → Enable Socket Mode → generate an **App-Level Token** with scope `connections:write`. Copy the `xapp-...` token.
+3. **OAuth & Permissions** → Bot Token Scopes → add: `app_mentions:read`, `chat:write`.
+4. **Event Subscriptions** → Enable Events → **Subscribe to bot events** → add `app_mention`.
+5. **Install App to Workspace** → copy the **Bot User OAuth Token** (`xoxb-...`).
+6. Add both tokens to your `.env`:
+   ```
+   SLACK_BOT_TOKEN=xoxb-...
+   SLACK_APP_TOKEN=xapp-...
+   ```
+7. Invite the bot to your channel: `/invite @YourBotName`.
+
+### Running the agent
+
+In a **separate terminal** alongside `make up`:
+
+```bash
+make agent-install   # first time only
+make agent           # starts the bot; press Ctrl-C to stop
+```
+
+Or manually:
+
+```bash
+pip install -r requirements-agent.txt
+python -m agent.agent
+```
+
+### Example interactions
+
+| You type in Slack | Bot does |
+|-------------------|----------|
+| `@DataBot backfill 20 screens` | Triggers run with LIMIT=20 |
+| `@DataBot run the pipeline for 50` | Triggers run with LIMIT=50 |
+| `@DataBot Hey can you process 10 new screens?` | Triggers run with LIMIT=10 |
+| `@DataBot what time is it?` | Replies asking to clarify |
+
+### Verifying it worked
+
+1. Bot replies in-thread with the `dag_run_id`.
+2. A new run appears in the Airflow UI: <http://localhost:8080/dags/rico_pipeline/grid>.
+3. Airflow `ingest_task` logs show the correct `LIMIT`.
+4. The existing Slack webhook (`SLACK_WEBHOOK_URL`) will also post a "Pipeline started" message if configured.
+
+### Smoke test (no Slack required)
+
+Verify Airflow connectivity before setting up Slack:
+
+```bash
+make agent-smoke LIMIT=5
+# or
+python -m agent.trigger_smoke 5
+```
+
+### Troubleshooting
+
+| Symptom | Fix |
+|---------|-----|
+| `Missing required env vars: SLACK_BOT_TOKEN, SLACK_APP_TOKEN` | Add tokens to `.env` |
+| `rico_pipeline is paused in Airflow` | Unpause the DAG in the UI and retry |
+| `Could not reach Airflow at http://localhost:8080` | Ensure `make up` succeeded and `AIRFLOW_API_URL` in `.env` points to host `localhost` (not `airflow-webserver`) |
+| Ollama call times out | Increase `AGENT_LLM_TIMEOUT` in `.env`; verify `make pull-models` ran |
+| Bot does not respond to mentions | Check Socket Mode is enabled and `SLACK_APP_TOKEN` starts with `xapp-` |
+
 ## Implementation Principles
 
 - Keep DAG files thin; place business logic in `src/rico_dag/`.

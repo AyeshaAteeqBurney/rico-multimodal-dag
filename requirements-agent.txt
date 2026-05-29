@@ -1,0 +1,7 @@
+# Agent-only dependencies — NOT added to pyproject.toml / Dockerfile.airflow.
+# Install with: pip install -r requirements-agent.txt
+# (or: make agent-install)
+
+slack-bolt>=1.21.0
+requests>=2.32
+python-dotenv>=1.0

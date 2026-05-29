@@ -8,6 +8,9 @@ x-airflow-env: &airflow-env
   # Same key on webserver + scheduler + init or log fetch returns 403 FORBIDDEN.
   AIRFLOW__WEBSERVER__SECRET_KEY: ${AIRFLOW_WEBSERVER_SECRET_KEY:-rico-p4-local-airflow-webserver-secret-do-not-use-in-prod}
   AIRFLOW__CORE__FERNET_KEY: ${AIRFLOW_FERNET_KEY:-}
+  # Enable Basic Auth for the REST API so the backfill agent can trigger DAG runs.
+  # session backend is also included so the Airflow UI keeps working.
+  AIRFLOW__API__AUTH_BACKENDS: "airflow.api.auth.backend.basic_auth,airflow.api.auth.backend.session"
   AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://rico:rico@postgres:5432/airflow
   # Rico DAG code (config.py) defaults to localhost; inside Compose use service names.
   POSTGRES_HOST: postgres

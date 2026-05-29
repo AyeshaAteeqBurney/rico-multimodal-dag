@@ -1,4 +1,4 @@
-.PHONY: help build up down clean pull-models reset airflow-init logs dag-trigger validate chaos-inject chaos-cleanup db-repair
+.PHONY: help build up down clean pull-models reset airflow-init logs dag-trigger validate chaos-inject chaos-cleanup agent-install agent agent-smoke db-repair
 
 COMPOSE := docker compose
 
@@ -24,6 +24,9 @@ help:
 	@echo "  validate      run Project 4 rubric checks (scripts/validate_project4.py)"
 	@echo "  chaos-inject  inject duplicate rows for audit circuit-breaker demo"
 	@echo "  chaos-cleanup remove chaos rows and restore PKs"
+	@echo "  agent-install install agent dependencies (slack-bolt etc.)"
+	@echo "  agent         start the Slack backfill agent (Socket Mode)"
+	@echo "  agent-smoke   smoke-test Airflow API trigger without Slack"
 
 build:
 	$(COMPOSE) build airflow-init airflow-webserver airflow-scheduler
@@ -76,6 +79,17 @@ chaos-cleanup:
 
 chaos-cleanup-docker:
 	$(COMPOSE) exec -e POSTGRES_HOST=postgres airflow-scheduler python /opt/airflow/chaos/inject_duplicates.py --cleanup
+
+# ── Bonus: Backfill Agent ────────────────────────────────────────────────────
+
+agent-install:
+	pip install -r requirements-agent.txt
+
+agent:
+	python -m agent.agent
+
+agent-smoke:
+	python -m agent.trigger_smoke $(LIMIT)
 
 db-repair:
 	$(COMPOSE) exec -T postgres psql -U $(POSTGRES_USER) -d $(POSTGRES_DB) -f /docker-entrypoint-initdb.d/003_embeddings_chaos_safe.sql
