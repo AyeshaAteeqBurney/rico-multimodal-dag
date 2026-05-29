@@ -44,6 +44,16 @@ class AgentSettings:
     ollama_model: str = os.environ.get("OLLAMA_MODEL", "qwen2.5:3b")
     llm_timeout: int = int(os.environ.get("AGENT_LLM_TIMEOUT", "60"))
 
+    # ── Postgres (read-only diagnosis) ──────────────────────────────────────────
+    # Agent runs on host, so the Compose service name "postgres" maps to localhost
+    # (the port is published in docker-compose.yml).
+    _raw_pg_host: str = os.environ.get("POSTGRES_HOST", "localhost")
+    postgres_host: str = "localhost" if _raw_pg_host in ("postgres", "db") else _raw_pg_host
+    postgres_port: str = os.environ.get("POSTGRES_PORT", "5432")
+    postgres_db: str = os.environ.get("POSTGRES_DB", "rico")
+    postgres_user: str = os.environ.get("POSTGRES_USER", "rico")
+    postgres_password: str = os.environ.get("POSTGRES_PASSWORD", "rico")
+
     def validate(self) -> None:
         missing = []
         if not self.slack_bot_token:

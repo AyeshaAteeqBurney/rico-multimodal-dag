@@ -1,326 +1,174 @@
-# RICO Multimodal DAG 
+# RICO Multimodal DAG
 
-This project implements an end-to-end multimodal data pipeline as an Airflow DAG. It ingests UI screens, parses hierarchy structure, computes image and text embeddings, performs extraction, loads results into Postgres + pgvector, runs a duplicate-detection audit as a circuit breaker, and executes evaluation.
+End-to-end multimodal pipeline as an Airflow DAG: ingest RICO screens, parse hierarchy, embed images (CLIP) and text (SBERT), extract structured JSON (Ollama), load into Postgres + pgvector, run a data-integrity audit as a circuit breaker, then evaluate.
 
-The pipeline is production-oriented: scheduled orchestration, idempotent writes, row-level traceability, and observable run outcomes.
+Production-oriented: idempotent writes, row-level traceability, observability metrics, Slack alerts.
 
 ## Pipeline Flow
 
-Simple DAG structure:
+`ingest → parse → [embed_image, embed_text, extract] → load → audit → eval`
 
-`ingest -> parse -> [embed_image, embed_text, extract] -> load -> audit -> eval`
-
-The DAG executes the following sequence:
-
-- The three middle tasks (`embed_image`, `embed_text`, `extract`) run in parallel.
-- A `LIMIT` DAG parameter controls batch size for development and demo runs.
-- The audit task can halt downstream execution by failing on duplicate detection.
+- Middle three tasks run in parallel.
+- `LIMIT` DAG param controls batch size (`make dag-trigger LIMIT=5`).
+- Audit runs **after load, before eval** — failure skips eval and marks the run `paused_by_audit`.
 
 ## Core Capabilities
 
-- **Idempotency**
-  - Re-running with the same inputs does not create duplicate rows or duplicate objects.
-  - Database writes use conflict-safe patterns and deterministic keys.
-
-- **Traceability**
-  - Every pipeline run is recorded in `pipeline_runs`.
-  - Destination rows carry `run_id` and `source_fingerprint`.
-  - Fingerprints allow exact input provenance tracking.
-
-- **Audit Circuit Breaker**
-  - Duplicate-detection audit runs after load and before eval.
-  - Audit failure blocks `eval` and marks the run as failed/paused.
-  - Violations are logged and persisted for investigation.
-
-- **Observability Foundation**
-  - Schema includes `pipeline_metrics` and `audit_results`.
-  - Run lifecycle hooks are wired to support status tracking.
+| Area | Behavior |
+|------|----------|
+| **Idempotency** | `ON CONFLICT` upserts; re-run with same `LIMIT` adds no duplicate rows |
+| **Traceability** | `pipeline_runs` + `run_id` / `source_fingerprint` on every destination row |
+| **Audit** | 5-check integrity suite; fails loudly, blocks eval, persists to `audit_results` |
+| **Observability** | `pipeline_metrics` + end-of-run log summary + Slack notifications |
 
 ## Tech Stack
 
-- **Orchestration:** Apache Airflow
-- **Database:** PostgreSQL + pgvector
-- **Object Storage:** MinIO (S3-compatible)
-- **LLM Runtime:** Ollama
-- **ML/Data Libraries:** HuggingFace datasets, open-clip, sentence-transformers
+Airflow · PostgreSQL + pgvector · MinIO · Ollama · HuggingFace · open-clip · sentence-transformers
 
 ## Repository Structure
 
 ```text
 rico-multimodal-dag/
-  dags/                  # DAG definitions (orchestration only)
-  src/rico_dag/          # Pipeline business logic modules
-  migrations/            # Database schema migrations
-  data/                  # Local run inputs/config data
-  docker-compose.yml     # Full local stack
-  Makefile               # Common lifecycle commands
-  pyproject.toml         # Python dependencies
-  .env.example           # Environment variable template
+  dags/              # DAG definitions (orchestration only)
+  src/rico_dag/      # Pipeline business logic
+  agent/             # Bonus: Slack DataOps agent
+  chaos/             # Audit circuit-breaker demo injector
+  migrations/        # Database schema
+  scripts/           # validate_project4.py rubric checker
+  tests.md           # Full test guide (validation, chaos, agent)
+  docker-compose.yml
+  Makefile
 ```
 
 ## Setup
 
-1. Copy environment template:
-
 ```bash
 cp .env.example .env
-```
-
-2. Start the full stack:
-
-```bash
+make build
 make up
+make pull-models
 ```
 
-This stack builds a custom Airflow image (`Dockerfile.airflow`) and installs project dependencies during image build. You do not need to run manual `pip install` commands inside Airflow containers after startup.
-
-3. Open Airflow UI:
-
-- <http://localhost:8080>
-- Default credentials: `admin` / `admin`
+Airflow UI: <http://localhost:8080> (`admin` / `admin`). Unpause `rico_pipeline` after first start.
 
 ## Running the Pipeline
 
-Trigger the DAG manually with a small development batch:
-
 ```bash
 make dag-trigger LIMIT=5
 ```
 
-For larger runs, increase `LIMIT`:
+## Validation & Testing
+
+See **[tests.md](tests.md)** for step-by-step scripts covering:
+
+- Happy path + rubric validation (`make validate` / `make validate-docker`)
+- Idempotency re-run check
+- Chaos / audit circuit-breaker scenarios (`duplicate`, `zero-norm`, `orphan`, `missing`, `all`)
+- Instructor-style fresh stack check (without wiping Ollama volumes)
+- Bonus agent smoke + Slack demo flow
+
+Quick rubric check after a successful run:
 
 ```bash
-make dag-trigger LIMIT=50
+make validate-docker
 ```
-
-## Validation (§6)
-
-After a successful DAG run (`make dag-trigger LIMIT=5`), verify the rubric from the assignment PDF:
-
-```bash
-make validate
-# or (from your laptop — maps postgres/minio/ollama in .env to localhost automatically)
-python scripts/validate_project4.py --skip-infra
-```
-
-If `.env` uses Docker service names (`POSTGRES_HOST=postgres`), run validation **on the host** without flags: the script rewrites them to `localhost` for published ports. Inside a container use `make validate-docker` or pass `--compose-env`.
-
-**Idempotency check** (Definition of Done §5):
-
-```bash
-python scripts/validate_project4.py --save-snapshot .p4-snapshot.json --skip-infra
-make dag-trigger LIMIT=5
-# wait for run to finish
-python scripts/validate_project4.py --check-idempotency .p4-snapshot.json --skip-infra
-```
-
-**Audit circuit breaker** (optional in-process proof):
-
-```bash
-python scripts/validate_project4.py --test-audit-breaker
-```
-
-**Audit circuit breaker demo** (Assignment §5 — corrupt data, re-run, eval skipped):
-
-```bash
-# After a successful run:
-make chaos-inject
-make dag-trigger LIMIT=5
-# In Airflow UI: audit_task failed, eval_task upstream_failed/skipped
-
-make chaos-cleanup
-make dag-trigger LIMIT=5
-# Should succeed again after cleanup
-```
-
-**Important:** After `chaos-inject`, run **`make dag-trigger`** again (do not skip cleanup first). Embed keeps working via a partial unique index; `audit_task` reassigns the chaos row to the current `run_id` and fails per §5. Then **`make chaos-cleanup`** before normal operation.
-
-If embed fails with `no unique or exclusion constraint matching the ON CONFLICT specification`, apply the DB repair migration:
-
-```bash
-docker compose exec postgres psql -U rico -d rico -f /docker-entrypoint-initdb.d/003_embeddings_chaos_safe.sql
-```
-
-(Or `make clean` on a dev volume.)
-
-Script: `chaos/inject_duplicates.py` (same idea as sess8 `chaos/inject_duplicates.py`). It tags chaos rows with `source_fingerprint=chaos-duplicate-inject-v1` and temporarily drops the embeddings PK so a true duplicate key exists for `audit_task`.
-
-See **Audit Failure Interpretation** below for SQL/log interpretation.
 
 ## Operational Commands
 
-- Start services: `make up`
-- Validate rubric: `make validate`
-- Stop services: `make down`
-- Full reset (remove volumes): `make clean`
-- Data reset (truncate tables + clear bucket): `make reset`
-- Pull LLM model: `make pull-models`
-- Tail logs: `make logs`
+| Command | Purpose |
+|---------|---------|
+| `make up` / `make down` | Start / stop stack (volumes preserved) |
+| `make reset` | Truncate tables + clear MinIO bucket |
+| `make clean` | Stop stack **and wipe volumes** (re-pull Ollama model) |
+| `make logs` | Tail compose logs |
+| `make chaos-inject` / `make chaos-cleanup` | Audit demo corruption / cleanup |
+| `make agent-install` / `make agent` | Bonus Slack agent |
 
-## Data Model Summary
+## Data Model
 
-- `screens_metadata`: per-screen metadata and extraction fields
-- `screens_embeddings`: vector outputs keyed by screen/model/kind
-- `screens_review_queue`: extraction issues requiring review
-- `screens_eval`: evaluation results
-- `pipeline_runs`: run-level metadata and status
-- `audit_results`: audit outcomes and details
-- `pipeline_metrics`: health and quality metrics per run
+`screens_metadata` · `screens_embeddings` · `screens_review_queue` · `screens_eval` · `pipeline_runs` · `audit_results` · `pipeline_metrics`
 
-## Pipeline Metrics Explained
+Audit checks (per `run_id`): duplicate embeddings/metadata, invalid (zero-norm) vectors, orphan embeddings, missing embeddings. Details in [tests.md §9](tests.md#9-audit-failure-reference).
 
-The `pipeline_metrics` table records health and data quality metrics after each run. Key metrics:
+## Troubleshooting
 
-- **`screens_metadata_row_count`**: Total screens ingested in this run. Expected: matches `LIMIT`.
-- **`pct_extracted`**: Percentage of screens where LLM extraction succeeded (extraction_payload is non-null). Expected: 90-100%. Below 50% indicates extraction issues.
-- **`pct_high_confidence`**: Percentage of screens with extraction confidence >= 0.5. Expected: 80-100%. Below 70% may indicate low-quality extractions.
-- **`pct_in_review_queue`**: Percentage of screens flagged for manual review (screens_review_queue). Expected: 0-5%. Above 10% indicates systematic extraction problems.
-- **`distinct_app_packages`**: Count of unique Android app packages in this run. Indicator of dataset diversity.
-- **`distinct_categories`**: Count of unique app categories in this run. Indicator of category diversity.
-- **`embeddings_pct_zero_norm`** (by model/kind): Percentage of embeddings with near-zero norm (vector_norm < 0.001). Expected: 0%. Non-zero indicates malformed or degenerate embeddings.
-- **`embeddings_avg_dim`** (by model/kind): Average dimensionality of computed embeddings. Sanity check that embeddings are being computed at all.
-- **`task_duration_seconds`**: Wall-clock duration per task. Used to identify bottlenecks (`extract_task` is typically slowest).
-- **`task_retries`**: Retry count per task. Expected: 0. Non-zero indicates task instability.
-- **`total_run_duration_seconds`**: Total pipeline end-to-end duration. Baseline for performance tracking.
-- **`final_run_status`**: Final pipeline outcome label in metric labels (`succeeded`, `failed`, `paused_by_audit`).
+**Ingest / HuggingFace DNS:** Recreate Airflow after compose DNS changes; verify `socket.gethostbyname('huggingface.co')` inside the scheduler. See [tests.md §11](tests.md#11-troubleshooting).
 
-## Audit Failure Interpretation
+**Embed ON CONFLICT after chaos:** `make db-repair` or apply migration `003_embeddings_chaos_safe.sql`.
 
-The audit task checks for duplicates and acts as a circuit breaker. **If audit fails:**
-
-1. **Check `audit_results` table** for the failing run:
-   - `passed = false` indicates duplicates were found
-   - `details` (JSON) lists which table(s) had violations and which screen_ids
-
-2. **Duplicate types:**
-   - **Metadata duplicates**: Same `screen_id` appears twice in `screens_metadata` for the same run. Root cause: idempotency bug in ingest/load, or concurrent writes.
-   - **Embedding duplicates**: Same `(screen_id, model_name, model_version, embedding_kind)` appears twice for the same run. Root cause: idempotency bug in embed tasks, or data corruption.
-
-3. **Next steps:**
-   - **Investigate root cause**: Check logs for the failing task and the run before it. Did the previous run succeed? Did inputs change?
-   - **Data corruption scenario**: If duplicates are in old data (different run_id), they won't block the current run. Audit only checks the current run.
-   - **Fix and re-run**: Once root cause is fixed, truncate the problematic table (`make reset`) and trigger the DAG again.
-   - **Manual review**: Visit `http://localhost:8080`, click the failed DAG run, check task logs for details.
-
-4. **Expected behavior on audit failure:**
-   - `audit_task` fails with an AirflowException.
-   - `eval_task` is skipped (trigger_rule="all_success" prevents it from running).
-   - Run status is marked as `failed` or `paused_by_audit` in `pipeline_runs`.
-   - Slack notification (if configured) alerts that audit failed with violation details.
-
-## Troubleshooting: ingest and Slack (DNS / Hub connectivity)
-
-If **`ingest_task`** fails with `ConnectionError: Couldn't reach 'rootsautomation/RICO-Screen2Words' on the Hub`, or Slack logs show **`Failed to resolve 'hooks.slack.com'`**, the Airflow container usually cannot resolve public DNS or reach the internet.
-
-1. **Recreate Airflow after compose DNS** — `docker-compose.yml` sets public DNS (`8.8.8.8`, `8.8.4.4`) on `airflow-init`, `airflow-webserver`, and `airflow-scheduler`. After pulling changes, run:
-   `docker compose up -d --force-recreate airflow-init airflow-webserver airflow-scheduler`
-2. **Override DNS** — set `COMPOSE_DNS_SERVER_1` / `COMPOSE_DNS_SERVER_2` in `.env` (see `.env.example`) if your network requires different resolvers.
-3. **Verify inside the scheduler** — `docker compose exec airflow-scheduler python -c "import socket; print(socket.gethostbyname('huggingface.co'))"` should print an IPv4 address.
-4. **Corporate / offline** — if outbound HTTPS is blocked, use VPN or proxy (`HTTP_PROXY` / `HTTPS_PROXY`), or pre-populate an HF cache and point `HF_HOME` at a volume with the dataset already downloaded.
-
-`ingest` retries `load_dataset` a few times with backoff for transient hub errors; persistent DNS or firewall issues require the steps above.
+---
 
 ## Bonus: Backfill Agent (ChatOps)
 
-The base pipeline sends one-way Slack notifications via a webhook. This bonus adds a **two-way ChatOps interface**: a standalone Slack bot that listens for natural-language commands, uses the local Ollama LLM to parse intent, and triggers `rico_pipeline` via the Airflow REST API — all without touching the DAG code.
+Two-way Slack bot: natural-language commands → Ollama intent parsing → Airflow REST API + Postgres diagnostics. Does **not** modify the DAG.
 
-### How it works
+| Capability | Example | Action |
+|------------|---------|--------|
+| **Trigger** | `@DataBot backfill 20 screens` | Triggers run; replies with `dag_run_id` |
+| **Diagnose** | `@DataBot is the pipeline healthy?` | Reads run/audit/DAG state |
+| **Fix (gated)** | `@DataBot fix` → `@DataBot confirm` | Generic repair + re-run after human approval |
+
+**Confirmation gate:** Audit is a circuit breaker — the bot proposes fixes but only executes after explicit `confirm` in-thread (`cancel` to abort; 10 min expiry).
+
+### Architecture
 
 ```
-@DataBot run a backfill for 20 screens
-        │
-        ▼
-agent/agent.py   (Slack Socket Mode bot)
-        │  strip mention, send text to LLM
-        ▼
-agent/llm_parser.py   (Ollama /api/generate)
-        │  returns {"action":"trigger_pipeline","limit":20}
-        ▼
-agent/airflow_client.py
-        │  POST /api/v1/dags/rico_pipeline/dagRuns  {"conf":{"LIMIT":20}}
-        ▼
-Airflow creates manual dag run → ingest reads LIMIT=20
-        │
-        ▼
-Bot replies in Slack thread with dag_run_id + link
+@DataBot message → agent/agent.py (Socket Mode)
+  → llm_parser.py (Ollama) → intent
+  → trigger: airflow_client.py → POST dagRuns
+  → diagnose/fix: diagnostics.py + db.py → audit_results
+  → confirm: remediation.py → repair.py + re-trigger
 ```
+
+**Generic repair** (`agent/repair.py`): de-dupe, drop invalid/orphan/incomplete rows, restore PK if needed — then re-run. Real screens are rebuilt idempotently on re-run.
 
 ### Prerequisites
 
-1. Stack is running: `make up`
-2. Ollama model is pulled: `make pull-models`
-3. A Slack App is created and its tokens are in `.env` (see setup below).
-4. `rico_pipeline` is **unpaused** in the Airflow UI at <http://localhost:8080> (DAGs are paused at creation by default).
+1. `make up` + `make pull-models`
+2. Slack App tokens in `.env` (`SLACK_BOT_TOKEN`, `SLACK_APP_TOKEN`)
+3. `rico_pipeline` unpaused in Airflow UI
+4. Postgres reachable on `localhost:5432` (agent maps compose hostnames automatically)
 
 ### Slack App setup (one-time)
 
-1. Go to <https://api.slack.com/apps> → **Create New App** → **From scratch**.
-2. **Socket Mode** (left sidebar) → Enable Socket Mode → generate an **App-Level Token** with scope `connections:write`. Copy the `xapp-...` token.
-3. **OAuth & Permissions** → Bot Token Scopes → add: `app_mentions:read`, `chat:write`.
-4. **Event Subscriptions** → Enable Events → **Subscribe to bot events** → add `app_mention`.
-5. **Install App to Workspace** → copy the **Bot User OAuth Token** (`xoxb-...`).
-6. Add both tokens to your `.env`:
-   ```
-   SLACK_BOT_TOKEN=xoxb-...
-   SLACK_APP_TOKEN=xapp-...
-   ```
-7. Invite the bot to your channel: `/invite @YourBotName`.
+1. <https://api.slack.com/apps> → Create App → **Socket Mode** on → App-Level Token (`xapp-...`, scope `connections:write`)
+2. **OAuth & Permissions** → scopes: `app_mentions:read`, `chat:write`
+3. **Event Subscriptions** → `app_mention`
+4. Install to workspace → Bot Token (`xoxb-...`)
+5. Add to `.env`, invite bot: `/invite @YourBotName`
 
-### Running the agent
-
-In a **separate terminal** alongside `make up`:
+### Running
 
 ```bash
-make agent-install   # first time only
-make agent           # starts the bot; press Ctrl-C to stop
-```
-
-Or manually:
-
-```bash
-pip install -r requirements-agent.txt
-python -m agent.agent
+make agent-install   # first time
+make agent           # Ctrl-C to stop
+make agent-smoke     # Airflow trigger without Slack
+make agent-diagnose  # one-shot diagnosis CLI
 ```
 
 ### Example interactions
 
-| You type in Slack | Bot does |
-|-------------------|----------|
-| `@DataBot backfill 20 screens` | Triggers run with LIMIT=20 |
-| `@DataBot run the pipeline for 50` | Triggers run with LIMIT=50 |
-| `@DataBot Hey can you process 10 new screens?` | Triggers run with LIMIT=10 |
-| `@DataBot what time is it?` | Replies asking to clarify |
+| Slack | Bot |
+|-------|-----|
+| `@DataBot backfill 5 screens` | Triggers LIMIT=5, returns `dag_run_id` |
+| `@DataBot why did the pipeline fail` | Audit violation summary + recommended fix |
+| `@DataBot fix` | Proposes repair; waits for `confirm` |
+| `@DataBot confirm` | Runs repair + re-trigger |
 
-### Verifying it worked
+Full video demo script: see [tests.md §7](tests.md#7-bonus-agent--slack-video-flow).
 
-1. Bot replies in-thread with the `dag_run_id`.
-2. A new run appears in the Airflow UI: <http://localhost:8080/dags/rico_pipeline/grid>.
-3. Airflow `ingest_task` logs show the correct `LIMIT`.
-4. The existing Slack webhook (`SLACK_WEBHOOK_URL`) will also post a "Pipeline started" message if configured.
-
-### Smoke test (no Slack required)
-
-Verify Airflow connectivity before setting up Slack:
-
-```bash
-make agent-smoke LIMIT=5
-# or
-python -m agent.trigger_smoke 5
-```
-
-### Troubleshooting
+### Agent troubleshooting
 
 | Symptom | Fix |
 |---------|-----|
-| `Missing required env vars: SLACK_BOT_TOKEN, SLACK_APP_TOKEN` | Add tokens to `.env` |
-| `rico_pipeline is paused in Airflow` | Unpause the DAG in the UI and retry |
-| `Could not reach Airflow at http://localhost:8080` | Ensure `make up` succeeded and `AIRFLOW_API_URL` in `.env` points to host `localhost` (not `airflow-webserver`) |
-| Ollama call times out | Increase `AGENT_LLM_TIMEOUT` in `.env`; verify `make pull-models` ran |
-| Bot does not respond to mentions | Check Socket Mode is enabled and `SLACK_APP_TOKEN` starts with `xapp-` |
+| Missing `SLACK_BOT_TOKEN` / `SLACK_APP_TOKEN` | Add to `.env` |
+| DAG paused | Unpause in Airflow UI (agent can offer to fix) |
+| Cannot reach Airflow | `AIRFLOW_API_URL=http://localhost:8080` on host |
+| Ollama timeout | `AGENT_LLM_TIMEOUT`; run `make pull-models` |
+| No pending fix on `confirm` | Send `fix` first, same thread, within 10 min |
 
-## Implementation Principles
+## Principles
 
-- Keep DAG files thin; place business logic in `src/rico_dag/`.
-- Keep migrations additive and versioned.
-- Treat audit as an enforcement gate, not a warning.
-- Prefer deterministic keys and conflict-safe writes to preserve idempotency.
+- Thin DAG files; logic in `src/rico_dag/`
+- Audit is enforcement, not a warning
+- Deterministic keys + conflict-safe writes

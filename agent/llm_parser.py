@@ -1,10 +1,13 @@
-"""LLM intent parser — uses Ollama to extract action + LIMIT from a Slack message.
+"""LLM intent parser — uses Ollama to classify a Slack message into an action.
 
-Returns a dict ``{"action": "trigger_pipeline", "limit": <int>}`` on success,
-or ``None`` when the message is unrecognised or no valid limit can be extracted.
+Returns a dict ``{"action": <str>, "limit": <int|None>}``:
+  - action="trigger_pipeline" → run the DAG (with "limit")
+  - action="diagnose"         → report current pipeline health
+  - action="fix"              → diagnose then propose a confirm-gated fix
+  - action="unknown"          → message not understood (caller asks to clarify)
 
-A regex fallback handles common cases (e.g. "backfill 15") if Ollama returns
-malformed JSON, reducing demo failures.
+A regex fallback handles common cases (keywords + "backfill 15") if Ollama
+returns malformed JSON or is unreachable, reducing demo failures.
 """
 
 from __future__ import annotations
@@ -20,84 +23,95 @@ from agent.config import settings
 
 _log = logging.getLogger(__name__)
 
-_SYSTEM_PROMPT = """
-You are a DataOps assistant. A user has mentioned you in Slack.
-Decide whether they want to trigger the data pipeline, and if so extract how many screens.
+_VALID_ACTIONS = {"trigger_pipeline", "diagnose", "fix", "unknown"}
 
-Rules:
-- If the user wants to run / trigger / backfill / process screens, respond with action "trigger_pipeline".
-- Extract the number of screens as a positive integer (key "limit"). If no number is given, use 5.
-- If the message is unrelated (greeting, question about status, etc.) respond with action "unknown".
-- Respond ONLY with valid JSON. No extra text, no markdown.
+_SYSTEM_PROMPT = """
+You are a DataOps assistant mentioned in Slack. Classify the user's request into one action.
+
+Actions:
+- "trigger_pipeline": user wants to run / trigger / backfill / process N screens. Extract the
+  number of screens as integer "limit" (default 5 if none given).
+- "diagnose": user asks about pipeline health/status, what's wrong, why it failed, or to check it.
+- "fix": user asks you to fix / repair / resolve / clean up a problem with the pipeline.
+- "unknown": anything else (greetings, unrelated questions).
+
+Respond ONLY with valid JSON, no markdown, no extra text.
 
 Examples:
-  User: "backfill 20 screens" → {"action":"trigger_pipeline","limit":20}
-  User: "run the pipeline for 50" → {"action":"trigger_pipeline","limit":50}
-  User: "hey can you process 10 new screens?" → {"action":"trigger_pipeline","limit":10}
-  User: "what time is it?" → {"action":"unknown","limit":null}
+  "backfill 20 screens" -> {"action":"trigger_pipeline","limit":20}
+  "run the pipeline for 50" -> {"action":"trigger_pipeline","limit":50}
+  "is the pipeline healthy?" -> {"action":"diagnose","limit":null}
+  "what went wrong with the last run?" -> {"action":"diagnose","limit":null}
+  "can you fix the duplicate issue?" -> {"action":"fix","limit":null}
+  "please repair the pipeline" -> {"action":"fix","limit":null}
+  "what time is it?" -> {"action":"unknown","limit":null}
 """.strip()
+
+# Keyword fallbacks (checked before the integer fallback).
+_FIX_RE = re.compile(r"\b(fix|repair|resolve|clean\s*up|cleanup|remediate)\b", re.IGNORECASE)
+_DIAGNOSE_RE = re.compile(
+    r"\b(diagnose|status|health|healthy|what'?s wrong|what went wrong|check|investigate|why)\b",
+    re.IGNORECASE,
+)
+
+
+def _clamp_limit(raw_limit: object) -> int:
+    try:
+        limit = int(raw_limit) if raw_limit is not None else 5
+    except (TypeError, ValueError):
+        limit = 5
+    if limit < 1 or limit > 500:
+        _log.warning("limit %s out of range — clamping to 5", raw_limit)
+        limit = 5
+    return limit
 
 
 def _regex_fallback(text: str) -> dict | None:
-    """Try to extract a limit from plain text when LLM output is not valid JSON."""
-    # Look for any standalone integer in the message.
+    """Keyword/number heuristics when the LLM output is unusable."""
+    if _FIX_RE.search(text):
+        return {"action": "fix", "limit": None}
+    if _DIAGNOSE_RE.search(text):
+        return {"action": "diagnose", "limit": None}
     match = re.search(r"\b(\d{1,4})\b", text)
     if match:
         limit = int(match.group(1))
         if 1 <= limit <= 9999:
-            return {"action": "trigger_pipeline", "limit": limit}
+            return {"action": "trigger_pipeline", "limit": min(limit, 500)}
     return None
 
 
 def parse(user_message: str) -> dict | None:
-    """Parse a Slack message and return intent dict or None.
-
-    Returns:
-        {"action": "trigger_pipeline", "limit": int} — ready to trigger
-        None — message not understood; caller should ask for clarification
-    """
+    """Classify a Slack message. Returns an intent dict or None if unknown."""
     prompt = f"{_SYSTEM_PROMPT}\n\nUser message: {user_message}"
-    raw = ""
     try:
         response = requests.post(
             f"{settings.ollama_endpoint}/api/generate",
-            json={
-                "model": settings.ollama_model,
-                "prompt": prompt,
-                "stream": False,
-            },
+            json={"model": settings.ollama_model, "prompt": prompt, "stream": False},
             timeout=settings.llm_timeout,
         )
         response.raise_for_status()
         raw = response.json()["response"].strip()
         _log.debug("llm_parser raw response: %s", raw)
     except requests.RequestException as exc:
-        _log.warning("Ollama request failed: %s — falling back to regex", exc)
+        _log.warning("Ollama request failed: %s — falling back to keywords", exc)
         return _regex_fallback(user_message)
 
-    # Strip markdown code fences if present.
     raw_clean = re.sub(r"^```(?:json)?\s*|\s*```$", "", raw, flags=re.MULTILINE).strip()
-
     try:
         parsed = json.loads(raw_clean)
     except JSONDecodeError:
-        _log.warning("LLM returned non-JSON (%r) — trying regex fallback", raw_clean[:200])
+        _log.warning("LLM returned non-JSON (%r) — trying keyword fallback", raw_clean[:200])
         return _regex_fallback(user_message)
 
     action = parsed.get("action", "unknown")
-    raw_limit = parsed.get("limit")
+    if action not in _VALID_ACTIONS:
+        return _regex_fallback(user_message)
 
-    if action != "trigger_pipeline":
-        return None
+    if action == "unknown":
+        # Give keywords a chance — the LLM sometimes misses "fix"/"diagnose".
+        return _regex_fallback(user_message)
 
-    # Validate and clamp limit.
-    try:
-        limit = int(raw_limit) if raw_limit is not None else 5
-    except (TypeError, ValueError):
-        limit = 5
+    if action == "trigger_pipeline":
+        return {"action": "trigger_pipeline", "limit": _clamp_limit(parsed.get("limit"))}
 
-    if limit < 1 or limit > 500:
-        _log.warning("LLM returned out-of-range limit %s — clamping to 5", limit)
-        limit = 5
-
-    return {"action": "trigger_pipeline", "limit": limit}
+    return {"action": action, "limit": None}

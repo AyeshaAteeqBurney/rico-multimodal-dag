@@ -5,3 +5,5 @@
 slack-bolt>=1.21.0
 requests>=2.32
 python-dotenv>=1.0
+# Read-only Postgres access for the diagnose/fix capability.
+psycopg[binary]>=3.2

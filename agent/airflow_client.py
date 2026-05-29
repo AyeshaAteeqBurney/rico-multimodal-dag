@@ -31,13 +31,8 @@ def _auth() -> tuple[str, str]:
     return (settings.airflow_api_user, settings.airflow_api_password)
 
 
-def _check_dag_paused() -> None:
-    """Raise AirflowError before triggering if the DAG is paused.
-
-    Airflow 2.x returns HTTP 200 even for paused DAGs — the run is created
-    but sits in the queue and never executes.  Checking upfront prevents the
-    agent from falsely confirming a trigger that will not run.
-    """
+def is_paused() -> bool | None:
+    """Return True/False if the DAG is paused, or None if state can't be read."""
     url = f"{settings.airflow_api_url}/api/v1/dags/{settings.airflow_dag_id}"
     try:
         resp = requests.get(url, auth=_auth(), timeout=_TIMEOUT)
@@ -45,14 +40,41 @@ def _check_dag_paused() -> None:
         raise AirflowError(
             f"Could not reach Airflow at {settings.airflow_api_url}: {exc}"
         ) from exc
-
     if not resp.ok:
-        # Non-fatal: if we can't read DAG state, proceed and let the trigger
-        # call surface any real error.
-        _log.warning("Could not verify DAG state (HTTP %s) — proceeding anyway", resp.status_code)
-        return
+        _log.warning("Could not read DAG state (HTTP %s)", resp.status_code)
+        return None
+    return bool(resp.json().get("is_paused"))
 
-    if resp.json().get("is_paused"):
+
+def set_paused(paused: bool) -> None:
+    """Pause or unpause the DAG via PATCH /api/v1/dags/{dag_id}."""
+    url = f"{settings.airflow_api_url}/api/v1/dags/{settings.airflow_dag_id}"
+    try:
+        resp = requests.patch(
+            url,
+            json={"is_paused": paused},
+            auth=_auth(),
+            timeout=_TIMEOUT,
+        )
+    except requests.RequestException as exc:
+        raise AirflowError(
+            f"Could not reach Airflow at {settings.airflow_api_url}: {exc}"
+        ) from exc
+    if not resp.ok:
+        raise AirflowError(
+            f"Failed to set is_paused={paused} (HTTP {resp.status_code}): {resp.text[:200]}"
+        )
+    _log.info("Set %s is_paused=%s", settings.airflow_dag_id, paused)
+
+
+def _check_dag_paused() -> None:
+    """Raise AirflowError before triggering if the DAG is paused.
+
+    Airflow 2.x returns HTTP 200 even for paused DAGs — the run is created
+    but sits in the queue and never executes.  Checking upfront prevents the
+    agent from falsely confirming a trigger that will not run.
+    """
+    if is_paused():
         raise AirflowError(
             _UNPAUSE_MSG.format(dag_id=settings.airflow_dag_id, url=settings.airflow_api_url)
         )

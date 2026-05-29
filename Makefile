@@ -1,4 +1,4 @@
-.PHONY: help build up down clean pull-models reset airflow-init logs dag-trigger validate chaos-inject chaos-cleanup agent-install agent agent-smoke db-repair
+.PHONY: help build up down clean pull-models reset airflow-init logs dag-trigger validate validate-docker chaos-inject chaos-inject-docker chaos-cleanup chaos-cleanup-docker agent-install agent agent-smoke agent-diagnose db-repair
 
 COMPOSE := docker compose
 
@@ -9,6 +9,8 @@ MINIO_ACCESS_KEY ?= minioadmin
 MINIO_SECRET_KEY ?= minioadmin
 MINIO_BUCKET     ?= rico-raw
 LIMIT            ?= 5
+# Audit demo corruption: duplicate | zero-norm | orphan | missing | all
+SCENARIO         ?= duplicate
 
 # Commit baked into the image for pipeline_runs.git_sha (§3.2 traceability).
 GIT_SHA          ?= $(shell git rev-parse HEAD 2>/dev/null)
@@ -25,11 +27,12 @@ help:
 	@echo "  reset         truncate tables + clear MinIO bucket"
 	@echo "  logs          tail compose logs"
 	@echo "  validate      run Project 4 rubric checks (scripts/validate_project4.py)"
-	@echo "  chaos-inject  inject duplicate rows for audit circuit-breaker demo"
+	@echo "  chaos-inject  inject corruption for audit demo (SCENARIO=duplicate|zero-norm|orphan|missing|all)"
 	@echo "  chaos-cleanup remove chaos rows and restore PKs"
-	@echo "  agent-install install agent dependencies (slack-bolt etc.)"
-	@echo "  agent         start the Slack backfill agent (Socket Mode)"
+	@echo "  agent-install install agent dependencies (slack-bolt, psycopg, etc.)"
+	@echo "  agent         start the Slack DataOps agent: trigger / diagnose / fix (Socket Mode)"
 	@echo "  agent-smoke   smoke-test Airflow API trigger without Slack"
+	@echo "  agent-diagnose print a one-shot pipeline diagnosis (no Slack)"
 
 build:
 	$(COMPOSE) build --build-arg GIT_SHA=$(GIT_SHA) airflow-init airflow-webserver airflow-scheduler
@@ -69,19 +72,19 @@ validate:
 	python scripts/validate_project4.py --skip-infra
 
 validate-docker:
-	$(COMPOSE) exec -e POSTGRES_HOST=postgres airflow-scheduler python /opt/airflow/scripts/validate_project4.py --skip-infra
+	$(COMPOSE) exec -e POSTGRES_HOST=postgres airflow-scheduler python /opt/airflow/scripts/validate_project4.py --skip-infra --compose-env
 
 chaos-inject:
-	python chaos/inject_duplicates.py
+	python chaos/inject_duplicates.py --scenario $(SCENARIO)
 
 chaos-inject-docker:
-	$(COMPOSE) exec -e POSTGRES_HOST=postgres airflow-scheduler python /opt/airflow/chaos/inject_duplicates.py
+	$(COMPOSE) exec -e POSTGRES_HOST=postgres airflow-scheduler python /opt/airflow/chaos/inject_duplicates.py --scenario $(SCENARIO) --compose-env
 
 chaos-cleanup:
 	python chaos/inject_duplicates.py --cleanup
 
 chaos-cleanup-docker:
-	$(COMPOSE) exec -e POSTGRES_HOST=postgres airflow-scheduler python /opt/airflow/chaos/inject_duplicates.py --cleanup
+	$(COMPOSE) exec -e POSTGRES_HOST=postgres airflow-scheduler python /opt/airflow/chaos/inject_duplicates.py --cleanup --compose-env
 
 # ── Bonus: Backfill Agent ────────────────────────────────────────────────────
 
@@ -93,6 +96,9 @@ agent:
 
 agent-smoke:
 	python -m agent.trigger_smoke $(LIMIT)
+
+agent-diagnose:
+	python -m agent.diagnostics
 
 db-repair:
 	$(COMPOSE) exec -T postgres psql -U $(POSTGRES_USER) -d $(POSTGRES_DB) -f /docker-entrypoint-initdb.d/003_embeddings_chaos_safe.sql
